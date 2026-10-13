@@ -1,0 +1,31 @@
+# ---- maintainer-private notes: anything starting with _ ----
+_*
+.claude/settings.local.json
+
+# ---- personal library DATA — never commit (this repo ships the TOOL, not anyone's library) ----
+*.db
+*.db-*
+*.db.bak*
+pdfs/
+by-list/
+lists/
+INDEX.md
+references.bib
+cloud_lists.txt
+*.seed.json
+incoming/
+
+# bibliographic exports / user data
+*.bib
+*.ris
+*.csv
+
+# secrets (tokens live in ~/.config/<service>/, never in the repo)
+*token*
+.config/
+
+# python / macOS
+__pycache__/
+*.pyc
+.DS_Store
+.venv/

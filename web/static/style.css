@@ -1,0 +1,242 @@
+:root {
+  --bg: #14171c; --panel: #1b1f27; --panel2: #20252f; --line: #2c333f;
+  --fg: #d8dee9; --amber: #e1af37; --muted: #8b97a7; --accent: #6fb3ff; --accent2: #2d5e8f;
+  --pdf: #e7d27a; --ok: #7ec699; --warn: #e0a35a;
+  --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font: 14px/1.5 var(--sans); display: flex; flex-direction: column; }
+.muted { color: var(--muted); }
+.grow { flex: 1; }
+button { font: inherit; cursor: pointer; }
+
+#topbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px;
+  background: var(--panel); border-bottom: 1px solid var(--line); }
+.brand { font-weight: 600; letter-spacing: .3px; }
+.brand #lib { font-weight: 400; margin-left: 10px; font-size: 12px; }
+
+#grid { flex: 1; min-height: 0; display: grid;
+  grid-template-columns: var(--w-left, 270px) 6px minmax(0, 1fr) 6px var(--w-right, 46%); }
+/* min-width:0 lets the columns shrink to the dragged size instead of being forced
+   wider by their content (e.g. the open-paper tab strip). */
+#left, #center, #right { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
+#left { background: var(--panel); }
+#right { background: var(--panel); padding-bottom: 24px; }
+
+/* draggable dividers between the three panes */
+.gutter { background: var(--line); cursor: col-resize; }
+.gutter:hover, body.dragging .gutter { background: var(--accent2); }
+body.dragging { cursor: col-resize; user-select: none; }
+body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn't stall */
+
+/* lists */
+#listfilter { margin: 10px; padding: 6px 9px; background: var(--panel2); border: 1px solid var(--line);
+  color: var(--fg); border-radius: 6px; }
+#lists { overflow: auto; padding: 0 6px 10px; }
+.listrow { padding: 7px 9px; border-radius: 6px; cursor: pointer; }
+.listrow:hover { background: var(--panel2); }
+.listrow .ln { font-weight: 500; }
+.listrow .lc { font-size: 11px; color: var(--muted); margin-left: 6px; }
+.listrow .lb { font-size: 11.5px; color: var(--muted); margin-top: 2px; display: -webkit-box;
+  -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.chip { display: inline-block; font-size: 10px; padding: 1px 6px; margin: 3px 4px 0 0;
+  border: 1px solid var(--line); border-radius: 10px; color: var(--muted); }
+.stale { color: var(--warn); }
+
+/* tabs + panes */
+#tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
+.tab { background: transparent; color: var(--muted); border: 1px solid transparent; border-bottom: none;
+  padding: 7px 16px; border-radius: 7px 7px 0 0; }
+.tab.active { background: var(--panel2); color: var(--fg); border-color: var(--line); }
+.pane { display: none; flex: 1; min-height: 0; flex-direction: column; }
+.pane.active { display: flex; }
+
+/* search */
+#searchform { padding: 12px; }
+#q { width: 100%; padding: 9px 11px; background: var(--panel2); border: 1px solid var(--line);
+  color: var(--fg); border-radius: 7px; font-size: 14px; }
+#resulthead { padding: 0 14px 6px; font-size: 12px; }
+#results { overflow: auto; padding: 0 8px 12px; }
+.res { padding: 8px 10px; border-radius: 7px; cursor: pointer; border: 1px solid transparent; }
+.res:hover { background: var(--panel2); border-color: var(--line); }
+.res .t { line-height: 1.35; }
+.res .m { font-size: 12px; color: var(--muted); margin-top: 2px; }
+.pdfflag { color: var(--ok); font-weight: 700; }
+.nopdf { color: var(--muted); }
+
+/* chat */
+#transcript { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+.msg { max-width: 90%; padding: 9px 12px; border-radius: 10px; }
+.msg.sys { background: transparent; border: 1px dashed var(--line); color: var(--muted); max-width: 100%; }
+.msg.user { align-self: flex-end; background: var(--accent2); color: #eaf2fb; }
+.msg.bot { align-self: flex-start; background: var(--panel2); border: 1px solid var(--line); }
+.msg.bot p:first-child { margin-top: 0; } .msg.bot p:last-child { margin-bottom: 0; }
+.msg.bot pre { background: #0e1116; border: 1px solid var(--line); padding: 8px 10px; border-radius: 6px;
+  overflow: auto; font-family: var(--mono); font-size: 12.5px; }
+.msg.bot code { font-family: var(--mono); font-size: 12.5px; background: #0e1116; padding: 1px 4px; border-radius: 4px; }
+.msg.bot pre code { background: none; padding: 0; }
+.msg.bot ul, .msg.bot ol { margin: 6px 0; padding-left: 22px; }
+.cite { color: var(--accent); cursor: pointer; font-weight: 600; }
+.cite:hover { text-decoration: underline; }
+.msg.bot table { border-collapse: collapse; margin: 8px 0; font-size: 12.5px; width: 100%; }
+.msg.bot th, .msg.bot td { border: 1px solid var(--line); padding: 4px 8px; text-align: left; vertical-align: top; }
+.msg.bot th { background: var(--panel); font-weight: 600; }
+.act { display: inline-block; margin: 2px 3px; padding: 0 9px; border: 1px solid var(--accent2);
+  border-radius: 11px; color: var(--accent); cursor: pointer; font-size: 12px; line-height: 1.7; white-space: nowrap; }
+.act:hover { background: var(--accent2); color: #eaf2fb; }
+.typing::after { content: "▍"; color: var(--muted); animation: blink 1s steps(2) infinite; }
+@keyframes blink { 50% { opacity: 0; } }
+
+#chatform { display: flex; gap: 8px; padding: 10px 12px; border-top: 1px solid var(--line); }
+#chatinput { flex: 1; resize: none; max-height: 140px; padding: 9px 11px; background: var(--panel2);
+  border: 1px solid var(--line); color: var(--fg); border-radius: 8px; font: inherit; }
+#chatsend { padding: 0 18px; background: var(--accent2); color: #eaf2fb; border: none; border-radius: 8px; }
+#chatsend:disabled { opacity: .5; cursor: default; }
+
+/* right pane */
+#papertabs { display: flex; gap: 4px; overflow-x: auto; padding: 8px 8px 0; }
+.ptab { display: flex; align-items: center; gap: 6px; max-width: 220px; flex-shrink: 0; padding: 6px 9px;
+  background: var(--panel2); border: 1px solid var(--line); border-bottom: none;
+  border-radius: 7px 7px 0 0; font-size: 12px; white-space: nowrap; cursor: pointer; }
+.ptab.active { background: var(--bg); }
+.ptab .x { color: var(--muted); }
+.ptab .x:hover { color: var(--fg); }
+.ptab .lbl { overflow: hidden; text-overflow: ellipsis; }
+#detail { padding: 6px 12px 5px; font-size: 12px; border-bottom: 1px solid var(--line); max-height: 45%;
+  overflow: auto; flex: 0 0 auto; }
+#detail a { color: var(--accent); text-decoration: none; cursor: pointer; }
+#detail a:hover { text-decoration: underline; }
+/* line 1: the title, one line; click to expand */
+#detail .d-title { font-weight: 600; font-size: 13.5px; color: var(--fg); white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; cursor: pointer; }
+#detail.more .d-title { white-space: normal; }
+/* line 2: meta · status · actions, separated by dots; wraps only when the pane is narrow */
+#detail .d-row { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0; row-gap: 1px;
+  margin-top: 2px; color: var(--muted); min-width: 0; }
+#detail .d-row .sep { margin: 0 6px; color: var(--muted); opacity: .6; }
+#detail .d-row .d-au { color: var(--fg); }
+#detail .d-row .d-jr { max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+#detail .d-row .d-lists { cursor: pointer; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.d-acts { display: inline-flex; gap: 10px; align-items: baseline; white-space: nowrap; font-size: 12px; }
+#detail .d-row .d-acts { margin-left: auto; padding-left: 10px; }
+.d-acts a { color: var(--accent); text-decoration: none; cursor: pointer; }
+.d-acts a:hover { text-decoration: underline; }
+.d-acts #ctog { color: var(--muted); }
+.d-acts #ctog.has { color: var(--amber); }
+.pdfv-slot { margin-left: auto; display: flex; align-items: center; padding-left: 8px; }
+#detail .d-row .vok, #detail .d-row .vwarn { font-size: inherit; margin: 0; }
+/* expanded: full authors, lists, verification detail, abstract */
+#detail .d-more { margin-top: 5px; display: flex; flex-direction: column; gap: 3px; }
+#detail .d-full { color: var(--fg); }
+#detail .d-abs { color: var(--muted); max-height: 9.5em; overflow: auto; line-height: 1.45; }
+#pdfhost { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* ── PDF viewer (pdfview.js, ported from the session-dashboard kit) ── */
+.pdfv-box { flex: 1; min-height: 0; display: flex; flex-direction: column; background: #2a2e35; }
+.pdfv-bar { display: flex; flex-wrap: wrap; row-gap: 3px; gap: 4px; align-items: center; padding: 3px 10px; background: var(--panel);
+  border-bottom: 1px solid var(--line); flex: 0 0 auto; }
+.pbtn { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 5px;
+  padding: 0 7px; font-size: 11.5px; line-height: 20px; cursor: pointer; }
+.pbtn:hover { border-color: var(--accent2); }
+.pbtn.on { color: var(--amber); border-color: rgba(225,175,55,.55); }
+.pbtn:disabled { opacity: .45; cursor: default; }
+.pbtn.off { color: var(--muted); text-decoration: line-through; }
+.pdfv-scale { font: 11px var(--mono); color: var(--muted); min-width: 38px; text-align: center; }
+.pdfv-pages { flex: 1; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column;
+  align-items: center; gap: 14px; padding: 12px 0; }
+.pdfv-stage { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; height: 0; overflow: hidden; }
+.pdfv-page { position: relative; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.4); flex: 0 0 auto; }
+.pdfv-page canvas { display: block; }
+.pdfv-note { color: var(--muted); font-size: 12px; padding: 6px 12px; }
+.pdfv-fallback { flex: 1; width: 100%; min-height: 70vh; border: none; }
+/* PDF.js's own text-layer rules (pdfjs-dist/web/pdf_viewer.css), scoped — as the kit has them.
+   PDF.js 6 puts --font-height/--scale-x/--rotate on each span and leaves font-size and transform
+   to this stylesheet; without these every span sits at the wrong size and selections drift. */
+.pdfv-page .textLayer { position: absolute; inset: 0; overflow: clip; line-height: 1; letter-spacing: normal;
+  word-spacing: normal; text-align: initial; text-size-adjust: none; forced-color-adjust: none;
+  transform-origin: 0 0; caret-color: CanvasText; z-index: 0; color-scheme: only light;
+  --min-font-size: 1; --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size)); }
+.pdfv-page .textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text;
+  transform-origin: 0% 0%; user-select: text; }
+.pdfv-page .textLayer > :not(.markedContent),
+.pdfv-page .textLayer .markedContent span:not(.markedContent) {
+  z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1; --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv)); }
+.pdfv-page .textLayer .markedContent { display: contents; }
+.pdfv-page .textLayer ::selection { background: rgba(225,175,55,.45); }
+.pdfv-page .textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0;
+  cursor: default; user-select: none; }
+.pdfv-page .textLayer.selecting .endOfContent { top: 0; }
+.pdfv-box.region .textLayer { user-select: none; cursor: crosshair; }
+.pdfv-box.region .pdfv-page { cursor: crosshair; }
+.pdfv-rubber { position: absolute; z-index: 4; border: 1.5px dashed var(--amber); background: rgba(225,175,55,.16);
+  pointer-events: none; border-radius: 2px; }
+/* marks: highlight rects take no pointer events, so text under a mark stays selectable */
+.pdfv-page .pdfv-notes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.pdfv-hl { position: absolute; background: rgba(225,175,55,.32); border-radius: 2px; mix-blend-mode: multiply; }
+.pdfv-hl.on { background: rgba(255,120,40,.5); outline: 2px solid var(--amber); }
+.pdfv-pin { position: absolute; pointer-events: auto; cursor: pointer; width: 16px; height: 16px; border-radius: 50%;
+  background: var(--amber); color: #1a1a1a; font: 10px/16px var(--mono); text-align: center;
+  box-shadow: 0 1px 3px rgba(0,0,0,.4); }
+.pdfv-ask { position: absolute; z-index: 5; display: flex; gap: 6px; align-items: center; background: var(--panel);
+  border: 1px solid var(--line); border-radius: 9px; padding: 5px 7px; box-shadow: 0 3px 12px rgba(0,0,0,.45); }
+.pdfv-ask input { width: 240px; background: var(--panel2); color: var(--fg); border: 1px solid var(--line);
+  border-radius: 5px; padding: 3px 7px; font-size: 12px; }
+
+/* comments on the paper (detail panel) */
+#comments:not(:empty) { margin-top: 4px; }
+#comments .chead { display: flex; gap: 12px; align-items: center; }
+#comments .ctog, #comments .cadd { cursor: pointer; font-size: 12px; }
+#comments .clist { margin-top: 4px; display: flex; flex-direction: column; gap: 2px; }
+#comments .crow { display: flex; gap: 8px; align-items: baseline; padding: 3px 6px; border-radius: 6px; cursor: pointer; }
+#comments .crow:hover, #comments .crow.on { background: var(--panel2); }
+#comments .cpg { font: 11px var(--mono); color: var(--muted); flex: 0 0 auto; }
+#comments .cbody { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+#comments .cq { font-style: italic; color: var(--muted); }
+#comments .cn { color: var(--fg); white-space: pre-wrap; }
+#comments .cact { color: var(--muted); padding: 0 3px; }
+#comments .cact:hover { color: var(--fg); }
+
+#toast { position: fixed; bottom: 18px; left: 50%; transform: translateX(-50%); background: var(--panel2);
+  border: 1px solid var(--line); color: var(--fg); padding: 7px 14px; border-radius: 8px; z-index: 60;
+  box-shadow: 0 3px 12px rgba(0,0,0,.45); font-size: 13px; }
+#toast[hidden] { display: none; }
+.token-dead { position: fixed; top: 0; left: 0; right: 0; z-index: 70; background: #5a2a20; color: #fbe3dc;
+  padding: 10px 16px; font-size: 13.5px; border-bottom: 1px solid #a0503c; }
+#viewermsg { flex: 1; display: none; flex-direction: column; align-items: center; justify-content: center;
+  text-align: center; gap: 8px; padding: 30px; }
+#viewermsg .np-ic { font-size: 42px; opacity: .55; }
+#viewermsg .np-h { font-size: 16px; color: var(--fg); }
+#viewermsg .np-links a { color: var(--accent); }
+#viewermsg .muted { max-width: 380px; font-size: 12.5px; }
+#viewermsg .np-status { margin-top: 8px; min-height: 1em; color: var(--warn); }
+.np-dl { cursor: pointer; }
+#viewermsg code { font-family: var(--mono); font-size: 12px; background: #0e1116; padding: 1px 5px; border-radius: 4px; }
+
+/* BibTeX modal */
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 50; }
+.modal[hidden] { display: none; }
+.modal-box { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; width: min(680px, 92vw); max-height: 80vh; display: flex; flex-direction: column; }
+.modal-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--line); }
+.modal-head span { font-weight: 600; flex: 1; }
+.modal-head button { background: var(--panel2); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 3px 12px; }
+.modal-head button:hover { background: var(--accent2); color: #eaf2fb; }
+#bibtext { margin: 0; padding: 14px; overflow: auto; font-family: var(--mono); font-size: 12.5px; white-space: pre; color: var(--fg); }
+
+/* verification state of a record (papers.query_verification) */
+.vok { color: #7fbf7f; font-size: 12px; margin-top: 3px; }
+.vwarn { color: #e0a84a; font-size: 12px; margin-top: 3px; }
+
+/* inline text entry (no browser pop-ups): + note, and editing a comment */
+.ied { display: flex; flex-direction: column; gap: 4px; margin: 4px 0 6px; width: 100%; }
+.ied textarea { width: 100%; resize: none; background: var(--panel2); color: var(--fg); border: 1px solid var(--accent2);
+  border-radius: 6px; padding: 5px 8px; font: 12.5px/1.4 var(--sans); }
+.ied textarea:focus { outline: none; border-color: var(--accent); }
+.ied-btns { display: flex; gap: 6px; align-items: center; justify-content: flex-end; }
+.ied-btns .muted { margin-right: auto; font-size: 11px; }
+#toast .tbtn { margin-left: 12px; background: none; border: 1px solid var(--accent2); color: var(--accent);
+  border-radius: 5px; padding: 1px 8px; cursor: pointer; font-size: 12px; }

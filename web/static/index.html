@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>papers-vela</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header id="topbar">
+    <div class="brand">papers-vela<span id="lib" class="muted"></span></div>
+    <div class="grow"></div>
+    <div id="chatstate" class="muted"></div>
+  </header>
+
+  <main id="grid">
+    <!-- left: lists -->
+    <aside id="left">
+      <input id="listfilter" type="search" placeholder="filter lists…" autocomplete="off">
+      <div id="lists"></div>
+    </aside>
+
+    <div class="gutter" data-resize="left" title="drag to resize"></div>
+
+    <!-- center: search + chat -->
+    <section id="center">
+      <nav id="tabs">
+        <button class="tab active" data-pane="search">Search</button>
+        <button class="tab" data-pane="chat" id="chattab">Chat</button>
+      </nav>
+
+      <div class="pane active" id="pane-search">
+        <form id="searchform">
+          <input id="q" type="search" placeholder="author year (Herwig 2008) · or a topic (CEMP star observations)…" autocomplete="off">
+        </form>
+        <div id="resulthead" class="muted"></div>
+        <div id="results"></div>
+      </div>
+
+      <div class="pane" id="pane-chat">
+        <div id="transcript">
+          <div class="msg sys">Ask about your library — “which lists cover convective boundary mixing?”,
+            “what do I have on i-process in CEMP stars?” — or beyond it: “check for a new paper by Nandal on
+            arXiv” searches NASA ADS. Answers cite paper <b>[id]</b>s you can click to open. Ask it to
+            <b>add</b> a paper and it does, through the library's citation check; it changes nothing else.</div>
+        </div>
+        <form id="chatform">
+          <textarea id="chatinput" rows="1" placeholder="ask the librarian…" autocomplete="off"></textarea>
+          <button id="chatsend" type="submit">Send</button>
+        </form>
+      </div>
+    </section>
+
+    <div class="gutter" data-resize="right" title="drag to resize"></div>
+
+    <!-- right: paper tabs + PDF -->
+    <section id="right">
+      <div id="papertabs"></div>
+      <div id="detail" class="muted">Open a paper to view its PDF here.</div>
+      <div id="pdfhost"></div>
+      <div id="viewermsg"></div>
+    </section>
+  </main>
+
+  <div id="bibmodal" class="modal" hidden>
+    <div class="modal-box">
+      <div class="modal-head"><span>BibTeX</span>
+        <button id="bibcopy">Copy</button><button id="bibclose">✕</button></div>
+      <pre id="bibtext"></pre>
+    </div>
+  </div>
+
+  <div id="toast" hidden></div>
+  <script src="/pdfview.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
