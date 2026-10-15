@@ -63,14 +63,17 @@ in a banner instead of failing silently.
 3. the model's prose is streamed back token-by-token over **SSE** and rendered as markdown, with
    `[id]` citations turned into buttons that open the PDF, and tool progress shown while it works.
 
-The chat follows the `/papers` skill because its tools *are* the `/papers` CLI: it looks in the
-library first (`search_library`, `list_papers`, `show_paper`, `read_paper`), goes to NASA ADS for
-anything not there (`search_ads` — journals and arXiv/astro-ph), and adds a paper with `add_paper`,
-which runs `papers add` itself, so the admission gate verifies the record and may refuse it, and
-`references.bib` is regenerated after. The model is told never to state a DOI, author list or BibTeX
-entry from memory: identifiers come from tool results, and a BibTeX request is pointed at the
-paper's BibTeX link. Chat needs Claude Code installed and authenticated; if the `claude` CLI isn't
-found, the chat tab is disabled and browse still works.
+The chat follows `/papers` in both halves. Its rules are the skill's own: the server reads the
+RULES block of `skill/SKILL.md` (from this repo, so a backend without Claude Code gets them too)
+into the chat's instructions on every turn, and switches the chat off if the block is missing. Its
+tools are the skill's engine: it looks in the library first (`search_library`, `list_papers`,
+`show_paper`, `read_paper`), goes to NASA ADS for anything not there (`search_ads`, journals and
+arXiv/astro-ph), and adds a paper with `add_paper`, which runs `papers add` itself, so the admission
+gate verifies the record and may refuse it, and `references.bib` is regenerated after. The
+instructions in `server.py` (`LIBRARIAN`) add only how the rules apply in the GUI: tool names,
+`[id]` buttons, the BibTeX link, the one-paper-per-yes add. If the configured backend is not
+available (no `claude` CLI, or no key for an OpenAI-compatible endpoint), the chat tab is disabled
+and browse still works.
 
 ## Security model
 

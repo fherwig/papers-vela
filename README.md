@@ -16,8 +16,57 @@ What you get:
 - **A library you own**: one SQLite file (`library.db`) plus a `pdfs/` folder. No subscription, no
   cloud account, no lock-in. A lightweight alternative to Mendeley, ReadCube or Zotero, and it can
   also sit on top of a Zotero library.
-- **A command line** (`papers search`, `papers add`, …) for everything the app does, and an optional
-  `/papers` skill for Claude Code.
+- **A command line** (`papers search`, `papers add`, …) for everything the app does, and a
+  `/papers` skill that lets Claude Code use your library from any project.
+
+## How it fits together
+
+One library, one engine, and three ways in.
+
+```
+               your library: library.db + pdfs/
+                               │
+                     papers.py, the engine
+        the only code that reads or writes the library
+        ┌──────────────────────┬──────────────────────┐
+  the terminal            Claude Code            the web app
+    papers …           sessions, through   browse, read, mark up,
+                       the /papers skill      and ask the chat
+```
+
+- **Your library** is your data: one SQLite file and a folder of PDFs.
+- **The engine**, `papers.py`, is the only code that reads or writes the library. Everything else
+  goes through it, so all three ways in see the same papers. A passage you mark in the web app is
+  there for a Claude Code session, and a paper a session adds appears in the web app at once.
+- **The web app** is where you look at papers, find them, read them, mark passages and ask about
+  them. Its chat searches your library and NASA ADS, and adds papers when you ask. It runs on your
+  Claude subscription or on an OpenAI-compatible model, so you can use it without Claude Code.
+- **The `/papers` skill** is for Claude Code users. It is one file, `skill/SKILL.md`, that teaches
+  any Claude Code session, in any project, to use your library: find papers while you write, add
+  them through the citation check, regenerate `references.bib` and cite the keys. Install it in
+  step 6 below.
+- **The terminal**: the `papers` command does all of it by hand.
+
+### One set of rules
+
+The rules that keep citations right are written once, in the skill file: look in the library
+first, then NASA ADS; never write a DOI, author list or BibTeX entry from memory; add papers only
+through the citation check. Claude Code reads them from the skill, and the web app's chat reads the
+same block, whichever model it runs on.
+
+### What each one is for
+
+| | The web app | `/papers` in Claude Code, or the terminal |
+|---|---|---|
+| Find, read and ask about papers | yes | yes |
+| Add papers, through the citation check | yes, ask the chat | yes |
+| Mark passages and comment on them | yes, in the PDF viewer | read them with `papers show` |
+| Download PDFs | yes | yes |
+| Organise lists: file papers, rename, delete, describe a list | only when a paper is added | yes |
+| Generate `references.bib`, audit the library, check someone else's references, sync a copy | no | yes |
+
+The web app is for reading and asking. The skill and the terminal are for organising the library
+and for the writing side.
 
 ---
 
@@ -99,6 +148,18 @@ PDFs are fetched on demand: open a paper without one and click **Download PDF** 
 from the publisher, Unpaywall or arXiv), or file one you already have with
 `papers attach <id> ~/Downloads/paper.pdf`.
 
+### 6. Optional: the `/papers` skill for Claude Code
+
+If you use Claude Code, link the skill so every session can use your library:
+
+```bash
+mkdir -p ~/.claude/skills/papers
+ln -sf ~/papers-vela/skill/SKILL.md ~/.claude/skills/papers/SKILL.md   # a link, so it stays current
+```
+
+Then, in any Claude Code session: *"find my papers on convective boundary mixing"*, or *"add arXiv
+2609.21939 to my Pop III list and cite it"*.
+
 ### Updating
 
 ```bash
@@ -171,12 +232,8 @@ papers check-refs paper.bib                            # check someone else's re
 papers web | papers web stop | papers profile          # the app, and your settings
 ```
 
-**Claude Code users:** the `/papers` skill lets Claude Code drive these commands for you:
-
-```bash
-mkdir -p ~/.claude/skills/papers
-ln -sf ~/papers-vela/skill/SKILL.md ~/.claude/skills/papers/SKILL.md   # a link, so it stays current
-```
+**Claude Code users:** the `/papers` skill (install step 6) lets Claude Code run these commands for
+you.
 
 ---
 
@@ -212,8 +269,8 @@ Written by Falk Herwig and Joshua Issa.
 
 ## License
 
-[PolyForm Noncommercial 1.0.0](LICENSE): free to use, change and share for any noncommercial
-purpose: research, teaching, study, personal use, and use by universities, research institutes and
-other public or charitable organizations. Commercial use is not permitted. Because of that
-restriction this is *source-available* rather than open source in the OSI sense. The vendored
-pdf.js (`web/static/vendor/pdfjs/`) keeps its own Apache-2.0 license.
+[GNU General Public License v3.0](LICENSE). Copyright 2026 Falk Herwig and Joshua Issa.
+
+You may use, change and share papers-vela for any purpose, commercial use included. Anything you
+distribute that is built on it must also be under the GPL, with its source code. The vendored pdf.js
+(`web/static/vendor/pdfjs/`) keeps its own Apache-2.0 license, which is compatible with the GPL.

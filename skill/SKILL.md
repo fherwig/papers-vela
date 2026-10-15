@@ -15,6 +15,34 @@ override the profile for one run. You still need **`PAPERS_VELA`** (the repo-clo
 the CLI by full path — if it's unknown from context, ask. A user with no profile yet: run
 `papers init` (it creates the library and asks for the ADS token and chat model).
 
+## The library's rules
+
+These hold however the library is used. The web app's chat reads this block into its own
+instructions, so this is the one copy; the sections below say how to carry the rules out here.
+
+<!-- RULES:BEGIN. web/server.py (skill_rules) reads everything up to RULES:END into the web chat's
+     instructions on every turn, and switches the chat off if the block is missing. Keep it free of
+     command syntax: the chat has tools, not a shell. -->
+1. Look in the library first. Anything not in it goes to NASA ADS, which covers the journals and
+   arXiv. "New" or "just submitted" is relative to today's date; never assume the year.
+2. For every paper you name, say whether it is in the library (with its id) or only on ADS. For a
+   paper only on ADS, give its title, authors, bibcode and arXiv id, so "add it" is unambiguous.
+3. Never state a DOI, arXiv id, bibcode, author list, journal reference or BibTeX entry from
+   memory. Every identifier must come from the library or ADS. A DOI wrong by two characters still
+   resolves, to a different paper: 10.1093/mnrasl/slw175 is Reindl 2017, slw177 is Askar 2017.
+   That is how four wrong citations reached an accepted manuscript. Resolving is not verifying.
+4. A citation comes from the library: add the paper, and its entry in references.bib is the
+   citation. Never compose an entry by hand.
+5. Adding a paper runs the citation check, which compares the record with the journal (Crossref),
+   NASA ADS or arXiv, and may refuse it. If it refuses, report what it found and do not retry with
+   another identifier to get past it. Admitting a paper that cannot be verified is the user's own
+   deliberate step, with a recorded reason.
+6. Add papers when the user asks for them. Know what you are adding: look up an identifier you
+   have not seen resolved and say what it is; if it is not the paper the user described, or
+   several papers fit, ask before adding.
+7. When you cite a record marked not verified, never checked, or admitted by override, say so.
+<!-- RULES:END -->
+
 ## Library backends
 
 The library is `$PAPERS_LIB` if set, else `library` in the profile, else the path in
@@ -95,16 +123,11 @@ python3 $PAPERS_VELA/papers.py sync-trillium [--dry-run] [--no-pdfs]
 
 ## Citation correctness — read this before adding or citing anything
 
-Added 2026-08-14 after four bibliography entries with wrong data reached an **accepted** Physical
-Review Letters manuscript. Two DOIs resolved to unrelated papers, one denoted a paper that does not
+Rules 3 to 5 above come from 2026-08-14, when four bibliography entries with wrong data reached an
+**accepted** manuscript. Two DOIs resolved to unrelated papers, one denoted a paper that does not
 exist, and all four had paraphrased titles and truncated author lists. **The library held the
 correct values for two of them.** The entries had been typed by hand into a `.bib`, bypassing this
-tool entirely. So the rules below are about the paths *around* the library as much as the library.
-
-**The fact that invalidates the obvious check:** a DOI wrong by two characters **still resolves**,
-to a different paper. `10.1093/mnrasl/slw175` is Reindl 2017 (correct); `slw177` is Askar 2017
-(wrong). Asking "does this identifier resolve?" passes both. Only comparing the returned metadata
-catches it. Never treat a successful resolution as verification.
+tool entirely. So what follows is about the paths *around* the library as much as the library.
 
 **The admission gate.** `add` and `import_bib.py` check each record against an authority and refuse
 on `mismatch`, `unresolvable`, `unreachable`, or `no-identifier`. Validation follows the hierarchy
@@ -211,7 +234,7 @@ blurb with `papers set-summary "<list>" --blurb "…" --themes "…" --domains "
 1. **Finding papers** → run `search`, optionally with `--list`/`--author`/`--year`. Show the
    user the returned rows (id, year, author, title). To open one, run `open <id>`.
 2. **"What's in my <list>"** → `list "<name>"` (use `lists` first if the exact name is unclear).
-3. **Searching ADS (the usual front door)** → `ads "<query>"`, then import a hit with
+3. **Searching ADS (anything not in the library, per rule 1)** → `ads "<query>"`, then import a hit with
    `add <bibcode> --list "<list>"`, then `bib` to refresh `references.bib`. arXiv IDs look like
    `2401.01234`; DOIs start with `10.`; ADS bibcodes are 19 chars (e.g. `2023MNRAS.525.1601H`).
    ADS token: `~/.config/ads/token`.

@@ -12,8 +12,8 @@ Don't describe it or its chat as an agent. The command (`papers`), skill (`/pape
 history, merge requests). The public repository, <https://github.com/fherwig/papers-vela>, started
 from a fresh history and gets one squashed commit per release whose tree is exactly GitLab `main`'s
 (see **Publishing to GitHub**). So **everything on `main` is public**: no personal paths, accounts or
-hosts, no manuscript or referee details, no data. License: PolyForm Noncommercial 1.0.0 (`LICENSE`);
-the vendored pdf.js keeps its Apache-2.0 license.
+hosts, no manuscript or referee details, no data. License: GNU GPL v3.0 (`LICENSE`); the vendored
+pdf.js keeps its Apache-2.0 license.
 
 ## What this is
 A **vela** for a research library: a secure, governed space for AI-augmented work with your
@@ -360,6 +360,13 @@ What a contributor must not quietly weaken:
   note, and rects in page space at scale 1. Writing into the PDF would break the Trillium rsync
   (it relies on PDFs never being edited in place) and the Zotero backend (Zotero owns those files).
   `papers show` and the chat's `show_paper` list them. `trillium_sync` does not carry comments yet.
+- **The chat's rules are the /papers rules, one copy.** They live in the RULES block of
+  `skill/SKILL.md`; `skill_rules()` reads that block (from the repo, never the installed skill) into
+  the chat's instructions on every turn, for every backend, and `chat_available()` turns the chat
+  off when the block is missing. `LIBRARIAN` in `server.py` holds only how the rules apply in the
+  GUI. Change a rule in `SKILL.md`, never in `LIBRARIAN`, and keep the block free of command
+  syntax: the chat has tools, not a shell. `PAPERS_CHAT_BACKEND` switching backends drops the
+  profile's model, url and key, which belong to the profile's own backend.
 - **Two chat backends, one frame.** The profile's `chat.backend` picks `claude` (`run_claude`: the
   user's own Claude subscription via `claude -p`) or `velella`/`openai` (`run_openai`: an
   OpenAI-compatible endpoint, tokens.velella.ca by default, tool loop run in the server). Both share
