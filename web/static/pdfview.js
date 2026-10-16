@@ -380,7 +380,7 @@
       slot,
       setMarks(items) { marks = (items || []).filter((m) => m.page && m.rects && m.rects.length); redrawMarks(); },
       focus,
-      destroy() { dead = true; gen++; ro.disconnect(); if (io) io.disconnect(); if (doc) doc.destroy(); box.remove(); },
+      destroy() { dead = true; gen++; ro.disconnect(); if (io) io.disconnect(); if (doc) doc.loadingTask.destroy(); box.remove(); },   // pdf.js 6: the document has no destroy() of its own
     };
   }
 

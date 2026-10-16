@@ -47,6 +47,18 @@ function toast(msg, action) {
   clearTimeout(_toastT); _toastT = setTimeout(() => { t.hidden = true; }, action ? 7000 : 2600);
 }
 
+// Copy to the clipboard (127.0.0.1 is a secure context, so the Clipboard API is available). If the
+// browser refuses, select the text instead so ⌘C takes it: never a pop-up.
+function copyText(text, done, node) {
+  const fallback = () => {
+    if (node) { const r = document.createRange(); r.selectNodeContents(node);
+                const sel = getSelection(); sel.removeAllRanges(); sel.addRange(r); }
+    toast(`Press ⌘C to copy ${text}`);
+  };
+  if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(text).then(() => toast(done), fallback);
+  else fallback();
+}
+
 // NO BROWSER POP-UPS (Falk, 2026-10-09: "I never want to see browser pop up windows as input").
 // Text is entered inline: Enter saves, Shift+Enter is a new line, Esc cancels. Destructive actions
 // act at once and offer Undo in the toast instead of an "are you sure?" box.
@@ -224,7 +236,7 @@ async function openPaper(id) {
   try { d = await api(`/api/paper/${id}`); } catch (_e) {}
   let tab = tabs.find((t) => t.id === id);
   if (tab) { if (d) tab.d = d; } else { tab = { id, title: (d && d.title) || `#${id}`, d }; tabs.push(tab); }
-  activeTab = id;
+  activeTab = id; tab.used = ++tabClock;
   if (d) showDetail(d);
   else { $("#detail").className = "muted"; $("#detail").textContent = `No paper with id ${id} in this library.`; }
   showViewer(id, tab.d);
@@ -364,12 +376,35 @@ $("#viewermsg").addEventListener("click", async (e) => {
   } catch (err) { status.textContent = String(err); a.style.pointerEvents = ""; a.style.opacity = ""; }
 });
 
+// More than a few papers side by side is unreadable, so at most MAX_TABS stay tabs (fewer when the
+// pane is narrow): the ones used most recently. The rest wait in the "▾ N more" menu, which lists
+// every open paper. An in-page menu, never a browser pop-up.
+const MAX_TABS = 4;
+let tabClock = 0;                       // recency of use, so the papers you are reading stay tabs
+
+function activateTab(t) {
+  t.used = ++tabClock; activeTab = t.id;
+  if (t.d) showDetail(t.d);
+  showViewer(t.id, t.d); renderTabs();
+}
+
 function renderTabs() {
-  const box = $("#papertabs"); box.textContent = "";
-  for (const t of tabs) {
+  closeTabMenu();
+  const box = $("#papertabs");
+  const recent = [...tabs].sort((a, b) => (b.used || 0) - (a.used || 0));
+  for (let n = Math.min(MAX_TABS, tabs.length); ; n--) {
+    const shown = new Set(recent.slice(0, n).map((t) => t.id));
+    drawTabs(box, tabs.filter((t) => shown.has(t.id)), tabs.length - shown.size);
+    if (n <= 1 || box.scrollWidth <= box.clientWidth) break;
+  }
+}
+
+function drawTabs(box, shown, hidden) {
+  box.textContent = "";
+  for (const t of shown) {
     const tab = el("div", "ptab" + (t.id === activeTab ? " active" : ""));
     const lbl = el("span", "lbl", t.title); lbl.title = t.title;
-    lbl.onclick = () => { activeTab = t.id; if (t.d) showDetail(t.d); showViewer(t.id, t.d); renderTabs(); };
+    lbl.onclick = () => activateTab(t);
     tab.appendChild(lbl);
     const x = el("span", "x", "✕");
     x.onclick = (ev) => { ev.stopPropagation(); closeTab(t.id); };
@@ -377,7 +412,55 @@ function renderTabs() {
     tab.onauxclick = (ev) => { if (ev.button === 1) { ev.preventDefault(); closeTab(t.id); } };
     box.appendChild(tab);
   }
+  if (hidden > 0) {
+    const m = el("div", "ptab more", `▾ ${hidden} more`);
+    m.title = "all open papers";
+    m.onclick = (ev) => { ev.stopPropagation(); if ($("#tabmenu")) closeTabMenu(); else openTabMenu(m); };
+    box.appendChild(m);
+  }
 }
+
+function openTabMenu(btn) {
+  const m = el("div"); m.id = "tabmenu";
+  for (const t of [...tabs].sort((a, b) => (b.used || 0) - (a.used || 0))) {
+    const d = t.d || {};
+    const row = el("div", "mi" + (t.id === activeTab ? " active" : ""));
+    const who = [d.authors ? shortAuthors(d.authors).split(",")[0].replace(/ et al\.?$/, "") : "", d.year].filter(Boolean).join(" ");
+    row.append(el("span", "num", String(t.id)), el("span", "au", who), el("span", "ti", t.title));
+    row.title = t.title;
+    const x = el("span", "x", "✕"); x.title = "close this paper";
+    x.onclick = (ev) => {                 // close, and keep the menu open for the next one
+      ev.stopPropagation(); closeTab(t.id);
+      const b = document.querySelector("#papertabs .more"); if (b) openTabMenu(b);
+    };
+    row.append(x);
+    row.onclick = () => { closeTabMenu(); activateTab(t); };
+    row.onauxclick = (ev) => { if (ev.button === 1) { ev.preventDefault(); x.onclick(ev); } };
+    m.append(row);
+  }
+  document.body.append(m);
+  const r = btn.getBoundingClientRect();
+  m.style.top = `${r.bottom + 2}px`;
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  document.addEventListener("mousedown", tabMenuOutside, true);
+  document.addEventListener("keydown", tabMenuKey, true);
+}
+
+function closeTabMenu() {
+  const m = $("#tabmenu"); if (m) m.remove();
+  document.removeEventListener("mousedown", tabMenuOutside, true);
+  document.removeEventListener("keydown", tabMenuKey, true);
+}
+function tabMenuOutside(ev) {
+  if (!ev.target.closest("#tabmenu, #papertabs .more")) closeTabMenu();
+}
+function tabMenuKey(ev) { if (ev.key === "Escape") { ev.stopPropagation(); closeTabMenu(); } }
+
+let _tabsW = 0;                         // refit the tabs when the pane is resized
+new ResizeObserver(() => {
+  const w = $("#papertabs").clientWidth;
+  if (w !== _tabsW) { _tabsW = w; renderTabs(); }
+}).observe($("#papertabs"));
 
 function closeTab(id) {
   const i = tabs.findIndex((t) => t.id === id);
@@ -385,7 +468,7 @@ function closeTab(id) {
   tabs.splice(i, 1);
   const v = viewers.get(id); if (v) { v.destroy(); viewers.delete(id); }
   if (activeTab === id) {
-    const next = tabs[i] || tabs[i - 1];
+    const next = [...tabs].sort((a, b) => (b.used || 0) - (a.used || 0))[0];   // the one read last
     if (next) { activeTab = next.id; if (next.d) showDetail(next.d); showViewer(next.id, next.d); }
     else { activeTab = null;
            $("#viewermsg").style.display = "none"; $("#detail").textContent = "Open a paper to view its PDF here."; $("#detail").className = "muted"; }
@@ -440,6 +523,11 @@ function showDetail(d) {
 
   const row = el("div", "d-row");
   const add = (node) => { if (row.children.length) row.appendChild(el("span", "sep", "·")); row.appendChild(node); };
+  const idc = el("span", "d-id"), num = el("span", "num", String(d.id));   // the paper ID: click copies it
+  idc.append(el("span", "lbl", "ID"), num);
+  idc.title = `paper ID ${d.id}: click to copy (papers show ${d.id}, or [${d.id}] in the chat)`;
+  idc.onclick = () => copyText(String(d.id), `Copied paper ID ${d.id}`, num);
+  row.appendChild(idc);
   const au = el("span", "d-au", shortAuthors(d.authors)); au.title = d.authors || ""; add(au);
   if (d.year) add(el("span", null, String(d.year)));
   const jr = [abbrJournal(d.journal), d.volume, d.pages].filter(Boolean).join(" ");

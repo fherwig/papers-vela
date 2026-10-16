@@ -104,6 +104,19 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
 .ptab .x { color: var(--muted); }
 .ptab .x:hover { color: var(--fg); }
 .ptab .lbl { overflow: hidden; text-overflow: ellipsis; }
+.ptab.more { color: var(--amber); }
+#tabmenu { position: fixed; z-index: 50; min-width: 320px; max-width: min(560px, 90vw); max-height: 60vh;
+  overflow: auto; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45); font-size: 12px; }
+#tabmenu .mi { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 5px;
+  cursor: pointer; white-space: nowrap; }
+#tabmenu .mi:hover { background: var(--panel2); }
+#tabmenu .mi.active { background: var(--bg); }
+#tabmenu .mi .num { color: var(--amber); font-family: var(--mono); min-width: 4ch; text-align: right; }
+#tabmenu .mi .au { color: var(--muted); }
+#tabmenu .mi .ti { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#tabmenu .mi .x { color: var(--muted); padding: 0 2px; }
+#tabmenu .mi .x:hover { color: var(--fg); }
 #detail { padding: 6px 12px 5px; font-size: 12px; border-bottom: 1px solid var(--line); max-height: 45%;
   overflow: auto; flex: 0 0 auto; }
 #detail a { color: var(--accent); text-decoration: none; cursor: pointer; }
@@ -116,6 +129,12 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
 #detail .d-row { display: flex; flex-wrap: wrap; align-items: baseline; column-gap: 0; row-gap: 1px;
   margin-top: 2px; color: var(--muted); min-width: 0; }
 #detail .d-row .sep { margin: 0 6px; color: var(--muted); opacity: .6; }
+#detail .d-row .d-id { display: inline-flex; align-items: baseline; gap: 4px; margin-right: 8px; padding: 0 6px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--panel2); cursor: pointer;
+  font-size: 12px; white-space: nowrap; }
+#detail .d-row .d-id .lbl { color: var(--muted); font-size: 10.5px; letter-spacing: .3px; }
+#detail .d-row .d-id .num { color: var(--amber); font-family: var(--mono); user-select: all; }
+#detail .d-row .d-id:hover { border-color: var(--amber); }
 #detail .d-row .d-au { color: var(--fg); }
 #detail .d-row .d-jr { max-width: 26ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 #detail .d-row .d-lists { cursor: pointer; max-width: 22ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

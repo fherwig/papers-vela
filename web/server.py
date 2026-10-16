@@ -683,6 +683,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
+        # The app's own files change with every update, so the browser asks again each time (an old
+        # app.js was served from cache after a fix). The vendored pdf.js changes only with its version.
+        self.send_header("Cache-Control", "max-age=86400" if name.startswith("vendor" + os.sep) else "no-cache")
         self.end_headers()
         self.wfile.write(body)
 

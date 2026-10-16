@@ -197,8 +197,11 @@ Three panes, with dividers you can drag:
     counts. It never writes a DOI or a BibTeX entry from memory: identifiers come from the library
     or ADS, and a BibTeX request is pointed at the paper's BibTeX link. Every turn is logged on your
     machine (`~/.cache/papers-web/chatlog/`).
-- **Right: the PDF viewer**, a tab per open paper. Above it: the title (click for authors, lists and
-  the abstract) and one line of details, and the toolbar with **doi · arXiv · BibTeX · 💬 · + note**.
+- **Right: the PDF viewer**, a tab per open paper. Up to four tabs stay side by side (fewer in a
+  narrow pane), the ones you used last; the rest are in the **▾ more** menu, which lists every open
+  paper. Above the PDF: the title (click for authors, lists and the abstract), one line of details
+  that starts with the paper's **ID** (click it to copy), and the toolbar with
+  **doi · arXiv · BibTeX · 💬 · + note**.
   **Select a passage** to mark it with a comment, or drag a **region** (▭, or hold Alt) around a
   formula, table or figure. Marks are saved **with the paper** in your library, listed under 💬,
   and printed by `papers show`. *✎ mark* switches the offer off so you can copy text instead.
