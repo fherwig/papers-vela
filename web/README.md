@@ -37,6 +37,15 @@ CLI never disagree:
 | `GET /pdf/<id>` | streams the file at the paper's `pdf_path` |
 | `GET /api/comments/<id>` | the paper's comments (marks), `papers.query_comments` |
 | `POST /api/comments/<id>[/update\|/delete]` | add / edit / delete a comment — owner only |
+| `POST /api/lists/describe` `{name}` | the model rewrites a list's description from its papers (the chip) — owner only |
+| `POST /api/lists/rename` `{name, new_name}` | rename a list — owner only |
+| `POST /api/lists/merge` `{from, into}` | move `from`'s papers into `into`, then delete `from` — owner only |
+| `POST /api/lists/delete` `{name}` | delete a list (papers stay) — owner only |
+| `POST /api/lists/undo` `{id}` | undo one list change, from a button or from the chat — owner only |
+| `POST /api/model` `{name}` | switch the chat to another of the profile's models (and make it the default) |
+
+Every list change answers with `{label, undo}`; the toast's Undo (or the button under a chat reply)
+sends the id back. Papers are never deleted or edited by any of these.
 
 **PDF viewer and marks.** PDFs render in `static/pdfview.js`, a port of the session-dashboard
 kit's viewer: pdf.js (vendored, `static/vendor/pdfjs/PROVENANCE.md`, no CDN) draws each page as a
@@ -92,11 +101,14 @@ others:
   no MCP server but ours, no plugins, skills, hooks, user settings or CLAUDE.md. Naming what is
   *allowed* is the point. The earlier launch named built-ins to *deny*, and MCP tools from the
   user's plugins and connectors stayed live: the "read-only" chat was seen answering through a
-  plugin's web search (2026-10-06). The one write, `add_paper`, is offered only when the library
-  is writable **and** the user's own message asks to add (`ADD_INTENT`) or says a short yes to the
-  chat's own offer to add (`asks_to_add`), so a sentence inside an abstract or PDF cannot trigger
-  an add on its own. It never passes `--force-unverified`; an override stays the
-  user's own recorded CLI step. Titles, abstracts, PDF text and ADS results are untrusted data in
+  plugin's web search (2026-10-06). The chat may do what the user could do with a button, when the
+  user asks, and every change can be undone; it never deletes a paper or changes what a paper says.
+  Its writes are `add_paper` and the list tools (file papers into lists, rename, merge, delete,
+  describe). Each kind is offered only when the library is writable **and** the user's own message
+  asks for it (`ADD_INTENT`, `LIST_INTENT`) or says a short yes to the chat's own offer
+  (`asks_to_add`, `asks_to_organise`, then ONE change), so a sentence inside an abstract or PDF
+  cannot trigger a change. Each list change comes back with an Undo button under the reply.
+  `add_paper` never passes `--force-unverified`; an override stays the user's own recorded CLI step. Titles, abstracts, PDF text and ADS results are untrusted data in
   the system prompt (prompt-injection guard). Chat requests are concurrency-capped (one or two at a
   time) since each spawns a process.
 
@@ -110,8 +122,8 @@ scripts.
 |---|---|---|
 | `PAPERS_LIB` | `~/Papers` | library directory (db + `pdfs/`) — same as the CLI |
 | `PAPERS_WEB_PORT` | `8787` | port to bind |
-| `PAPERS_WEB_MODEL` | profile, else `claude-sonnet-5-5` | model for the chat tier |
-| `PAPERS_CHAT_BACKEND` | profile, else `claude` | `claude`, `velella` or `openai` — overrides the profile's `chat.backend` |
+| `PAPERS_WEB_MODEL` | the chosen model's | at start, override the model id of the model in use |
+| `PAPERS_CHAT_BACKEND` | profile, else `claude` | `claude`, `velella` or `openai` — at start, use the profile's first model of that backend instead of the default |
 | `PAPERS_WEB_CHATLOG` | `1` | `0` stops logging chat turns to `~/.cache/papers-web/chatlog/chat-YYYY-MM-DD.jsonl` (message, server context, tool calls + results, answer, cost; local only) |
 | `PAPERS_WEB_CHAT_CONCURRENCY` | `2` | max simultaneous chat processes |
 

@@ -80,6 +80,7 @@ def main():
            "_Routing index for the `/papers` skill and the papers-vela chat — match a topic against the themes/domains "
            "below to find the relevant lists. Regenerate with `papers reindex` + `papers bib`._\n"]
     last_src = None
+    written = set()                     # pages written now; any other page is for a list that is gone
     for l in lists:
         mem = db.execute(
             "SELECT p.* FROM paper_lists pl JOIN papers p ON p.id=pl.paper_id "
@@ -106,6 +107,10 @@ def main():
             ttl = (m["title"] or "").replace("|", "/")[:90]
             rows.append(f"| {m['year'] or ''} | {au} | {ttl} | {pdf} |")
         open(os.path.join(LISTS_DIR, slug + ".md"), "w", encoding="utf-8").write("\n".join(rows) + "\n")
+        written.add(slug + ".md")
+    for fn in os.listdir(LISTS_DIR):    # lists/ is generated: nothing in it is anyone's own file
+        if fn.endswith(".md") and fn not in written:
+            os.remove(os.path.join(LISTS_DIR, fn))
     open(INDEX, "w", encoding="utf-8").write("\n".join(idx) + "\n")
 
     print(f"references.bib: {n} entries -> {BIB}")

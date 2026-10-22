@@ -111,6 +111,46 @@
     return { page: parseInt(pageEl.dataset.page, 10), rects, quote, pageEl, kind: "region" };
   }
 
+  /* ── FIND IN THIS PDF ──────────────────────────────────────────────────────────────────
+     The kit's find bar wraps <mark> around matches inside single text nodes. In a PDF that
+     misses most phrases: the text layer splits every line, font change and italic word into
+     its own span. So each page's text layer is flattened once into one string with a map back
+     to (text node, offset): case and accents fold away, ligatures expand ("ﬁ" is "fi"),
+     whitespace and line ends collapse to one space, and a hyphen at a line end joins the word.
+     Hits are drawn as boxes from the DOM range's client rects, so the text layer itself is
+     never touched and selection and marks work as before. */
+  const fold = (ch) => ch.normalize("NFKD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const foldQuery = (q) => [...(q || "")].map(fold).join("").replace(/\s+/g, " ").trim();
+
+  function pageIndex(pg) {
+    const tl = pg.querySelector(".textLayer");
+    if (!tl) return null;
+    const text = [], orig = [], map = [];
+    let space = true, last = null;
+    const push = (c, o, at) => {
+      if (/\s/.test(c)) { if (space) return; c = " "; o = " "; space = true; } else space = false;
+      text.push(c); orig.push(o); map.push(at);
+    };
+    const tw = document.createTreeWalker(tl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT);
+    for (let n = tw.nextNode(); n; n = tw.nextNode()) {
+      if (n.nodeType === 1) {
+        if (n.tagName !== "BR" || !last) continue;       // a line end
+        const k = text.length;
+        if (k > 1 && text[k - 1] === "-" && /\p{L}/u.test(text[k - 2])) {
+          text.pop(); orig.pop(); map.pop(); space = false;   // "convec-" + "tive" is one word
+        } else push(" ", " ", last);
+        continue;
+      }
+      const v = n.nodeValue;
+      for (let i = 0; i < v.length; i++) {
+        const f = fold(v[i]);
+        for (let j = 0; j < f.length; j++) push(f[j], j ? "" : v[i], [n, i]);
+        last = [n, i];
+      }
+    }
+    return { text: text.join(""), orig, map };
+  }
+
   function mount(host, opts) {
     const toast = opts.toast || (() => {});
     const box = mk("div", "pdfv-box");
@@ -123,12 +163,20 @@
                               + "For formulas, tables and figures, where selecting text is unreliable.");
     const cMark = chip("", "");
     const slot = mk("span", "pdfv-slot");            // the host page's actions, right-aligned
+    const cFind = chip("⌕", "Find in this paper (⌘F with the pointer over the paper)", () => openFind());
     bar.append(cFit, cPage, chip("⊖", "zoom out", () => zoom(0.8)), chip("⊕", "zoom in", () => zoom(1.25)),
-               lbl, cRegion, cMark, chip("⟳", "Reload the PDF", () => reload()), slot);
+               lbl, cFind, cRegion, cMark, chip("⟳", "Reload the PDF", () => reload()), slot);
+    const fbar = mk("div", "pdfv-find");
+    const fin = mk("input"); fin.type = "search"; fin.placeholder = "find in this paper"; fin.spellcheck = false;
+    const fcnt = mk("span", "cnt", "");
+    const fList = chip("≡", "List every hit with its context");
+    fbar.append(fin, fcnt, chip("‹", "Previous hit (⇧Enter, ↑, ⌘⇧G)", () => findStep(true)),
+                chip("›", "Next hit (Enter, ↓, ⌘G)", () => findStep(false)), fList, chip("✕", "Close (Esc)", () => closeFind()));
+    const flist = mk("div", "pdfv-findlist");
     const pages = mk("div", "pdfv-pages");
     const note = mk("div", "pdfv-note", "rendering…");
     pages.append(note);
-    box.append(bar, pages);
+    box.append(bar, fbar, flist, pages);
     host.append(box);
 
     let scale = SCALE0, doc = null, gen = 0, base = null, bust = 0, region = false, dead = false;
@@ -355,6 +403,7 @@
         if (n === 1) pages.scrollTop = keepTop * pages.scrollHeight;
       }
       stage.remove();
+      if (fq) findRun(false);                       // the pages were rebuilt: their hits too
     };
     const redraw = () => draw().catch((e) => fallback(String(e.message || e), e));
     const setMode = (m) => { mode = m; localStorage.setItem(MODE_KEY, m); paintBar(); redraw(); };
@@ -372,12 +421,100 @@
       clearTimeout(rt); rt = setTimeout(redraw, 180);
     });
     ro.observe(pages);
+    // ---- find ----
+    let fq = "", hits = [], cur = -1, ftimer = null;
+    const FIND_CAP = 1000;
+    const findRun = (jump = true) => {
+      const needle = foldQuery(fin.value);
+      fq = needle; hits = [];
+      pages.querySelectorAll(".pdfv-findlayer").forEach((n) => n.remove());
+      if (needle) {
+        for (const pg of pages.querySelectorAll(":scope > .pdfv-page")) {
+          const ix = pg._ix || (pg._ix = pageIndex(pg));
+          if (!ix) continue;
+          for (let i = ix.text.indexOf(needle); i >= 0 && hits.length < FIND_CAP; i = ix.text.indexOf(needle, i + needle.length))
+            hits.push({ pg, ix, a: i, b: i + needle.length });
+        }
+      }
+      for (const h of hits) {                       // a box per line the hit covers
+        const [n0, o0] = h.ix.map[h.a], [n1, o1] = h.ix.map[h.b - 1];
+        const r = document.createRange(); r.setStart(n0, o0); r.setEnd(n1, o1 + 1);
+        let layer = h.pg.querySelector(":scope > .pdfv-findlayer");
+        if (!layer) { layer = mk("div", "pdfv-findlayer"); h.pg.append(layer); }
+        const pr = h.pg.getBoundingClientRect();
+        h.boxes = [...r.getClientRects()].filter((b) => b.width > 0.5 && b.height > 0.5).map((b) => {
+          const d = mk("div", "pdfv-fhit");
+          d.style.left = b.left - pr.left + "px"; d.style.top = b.top - pr.top + "px";
+          d.style.width = b.width + "px"; d.style.height = b.height + "px";
+          layer.append(d); return d;
+        });
+      }
+      cur = hits.length ? Math.min(Math.max(cur, 0), hits.length - 1) : -1;
+      if (jump) cur = hits.length ? 0 : -1;
+      renderList();
+      if (cur >= 0) findGo(cur, jump); else paintCount();
+    };
+    const paintCount = () => {
+      const h = hits[cur];
+      fcnt.textContent = !fq ? "" : !hits.length ? "no hits"
+        : `${cur + 1}/${hits.length}${hits.length >= FIND_CAP ? "+" : ""} · p. ${h ? h.pg.dataset.page : "?"}`;
+    };
+    const findGo = (k, scroll = true) => {
+      if (!hits.length) return;
+      if (hits[cur]) hits[cur].boxes.forEach((d) => d.classList.remove("cur"));
+      cur = (k + hits.length) % hits.length;
+      const h = hits[cur];
+      h.boxes.forEach((d) => d.classList.add("cur"));
+      if (scroll && h.boxes[0]) h.boxes[0].scrollIntoView({ block: "center", inline: "nearest" });
+      flist.querySelectorAll(".fh").forEach((r, i) => r.classList.toggle("cur", i === cur));
+      const row = flist.querySelector(".fh.cur");
+      if (row && flist.classList.contains("on")) row.scrollIntoView({ block: "nearest" });
+      paintCount();
+    };
+    const findStep = (back) => { if (!hits.length) return false; findGo(back ? cur - 1 : cur + 1); return true; };
+    function renderList() {                          // context around each hit, built as nodes: no HTML
+      flist.textContent = "";
+      hits.slice(0, 300).forEach((h, i) => {
+        const at = (x, y) => h.ix.orig.slice(Math.max(0, x), y).join("");
+        const row = mk("div", "fh" + (i === cur ? " cur" : ""));
+        row.append(mk("span", "pg", "p. " + h.pg.dataset.page), (h.a > 50 ? "…" : "") + at(h.a - 50, h.a),
+                   mk("b", null, at(h.a, h.b)), at(h.b, h.b + 70) + "…");
+        row.onclick = () => findGo(i);
+        flist.append(row);
+      });
+      if (hits.length > 300) flist.append(mk("div", "fh", `… and ${hits.length - 300} more`));
+    }
+    fList.onclick = () => { flist.classList.toggle("on"); fList.classList.toggle("on", flist.classList.contains("on")); findGo(cur, false); };
+    fin.oninput = () => { clearTimeout(ftimer); ftimer = setTimeout(() => findRun(true), 150); };
+    fin.onkeydown = (e) => {
+      e.stopPropagation();                           // Enter here must not mark a selection
+      if (e.key === "Enter") { e.preventDefault(); clearTimeout(ftimer); if (foldQuery(fin.value) !== fq) findRun(true); else findStep(e.shiftKey); }
+      else if (e.key === "Escape") { e.preventDefault(); closeFind(); }
+      else if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); findStep(e.key === "ArrowUp"); }
+    };
+    function openFind(q) {
+      const sel = window.getSelection && window.getSelection();
+      const picked = sel && !sel.isCollapsed && box.contains(sel.anchorNode) ? sel.toString().trim() : "";
+      if (q || (picked && picked.length <= 120)) fin.value = q || picked;
+      fbar.classList.add("on"); cFind.classList.add("on");
+      fin.focus(); fin.select();
+      if (foldQuery(fin.value) !== fq) findRun(true);
+    }
+    function closeFind() {
+      fbar.classList.remove("on"); flist.classList.remove("on"); cFind.classList.remove("on"); fList.classList.remove("on");
+      fq = ""; hits = []; cur = -1; fcnt.textContent = ""; flist.textContent = "";
+      pages.querySelectorAll(".pdfv-findlayer").forEach((n) => n.remove());
+    }
+    box._find = openFind;
+    box._findStep = (back) => fbar.classList.contains("on") && findStep(back);
+
     paintBar();
     redraw();
 
     return {
       el: box,
       slot,
+      find: openFind,
       setMarks(items) { marks = (items || []).filter((m) => m.page && m.rects && m.rects.length); redrawMarks(); },
       focus,
       destroy() { dead = true; gen++; ro.disconnect(); if (io) io.disconnect(); if (doc) doc.loadingTask.destroy(); box.remove(); },   // pdf.js 6: the document has no destroy() of its own
@@ -391,6 +528,18 @@
     const n = sel && sel.anchorNode;
     const box = n && (n.nodeType === 1 ? n : n.parentElement) && (n.nodeType === 1 ? n : n.parentElement).closest(".pdfv-box");
     if (box && box._ask && !sel.isCollapsed) { e.preventDefault(); box._ask(); }
+  });
+  // ⌘F with the pointer over a paper (or focus inside it) opens ITS find bar; elsewhere the
+  // browser's own find stays. ⌘G / ⌘⇧G step through the hits while the bar is open.
+  addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+    const k = e.key.toLowerCase();
+    if (k !== "f" && k !== "g") return;
+    const box = [...document.querySelectorAll(".pdfv-box")].find((b) => b.offsetParent !== null
+      && (b.matches(":hover") || b.contains(document.activeElement)));
+    if (!box) return;
+    if (k === "f") { e.preventDefault(); box._find(); }
+    else if (box._findStep(e.shiftKey)) e.preventDefault();
   });
   // release the selection guard on every text layer when the button comes up
   addEventListener("mouseup", () => document.querySelectorAll(".textLayer.selecting")

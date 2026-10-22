@@ -105,10 +105,13 @@ It asks four things and writes your answers to `~/.config/papers/profile.json`:
 3. **A NASA ADS token**: free, and needed to search ADS. Get it at
    <https://ui.adsabs.harvard.edu/user/settings/token> (make an account, then copy the token) and
    paste it when asked. It is stored in `~/.config/ads/token`, readable only by you.
-4. **Which model the chat uses**. Pick one (you can switch later by running `papers init` again):
+4. **Which model the chat uses** (you can add more and switch any time; see *The chat's models*
+   below):
    - **`claude`: your Claude subscription.** Install [Claude Code](https://claude.com/claude-code)
      and run `claude` once to log in with your Claude account. The chat then uses your own
-     subscription.
+     subscription. `papers init` asks which Claude model: `claude-sonnet-5-5` (the default),
+     `claude-opus-5-5` (the strongest; uses more of your plan) or `claude-haiku-5-5` (the
+     quickest).
    - **`velella`: tokens.velella.ca**, an open-weight model hosted for members of Falk Herwig's
      research group at the University of Victoria (currently Qwen 3.6). `papers init` creates a
      private key on your machine and shows you its **fingerprint**, a long string of letters and
@@ -117,12 +120,29 @@ It asks four things and writes your answers to `~/.config/papers/profile.json`:
      recovered, only replaced: delete `~/.config/spigot/key`, run `papers init` again, and send
      the new fingerprint.
 
-   Not in the group? Use `claude`, or point the chat at any OpenAI-compatible server that supports
-   tool calls by editing the profile's `chat` entry:
-   `{"backend": "openai", "url": "https://your-server/v1", "key_file": "~/.config/your-server/key"}`
-   (`model` is optional; without it the first model the server lists is used).
+   Not in the group? Use `claude`, or add any OpenAI-compatible server that supports tool calls
+   (see below).
 
 Run `papers profile` any time to see your settings and your fingerprint.
+
+### The chat's models
+
+Your profile can hold several models, one of them the default. In the web app, click the model's
+name in the top bar ("chat: claude-sonnet-5-5 ▾") to switch between them on the spot; the choice
+is kept for next time. In the terminal:
+
+```bash
+papers model                                         # list them; * marks the default
+papers model add opus --model claude-opus-5-5        # another Claude model
+papers model add velella --backend velella           # tokens.velella.ca (makes a key to enrol)
+papers model add mine --backend openai --url https://your-server/v1 --key-file ~/.config/mine/key
+papers model use opus                                # make one the default
+papers model served velella                          # which models an endpoint offers
+papers model remove mine
+```
+
+For an OpenAI-compatible server, `--model` is optional: without it the first model the server
+lists is used.
 
 ### 4. Open the web app
 
@@ -187,14 +207,22 @@ your library. Environment variables override the profile for one-off runs (`PAPE
 
 Three panes, with dividers you can drag:
 
-- **Left: your lists**, each with a one-line description. Click one to see its papers.
+- **Left: your lists**, each with a short description. Click one to see its papers; rest the pointer
+  on it to read the whole description, its themes and its year span. When a list
+  has changed a lot since its description was written, it shows **⚠ blurb stale**: click the chip
+  and the chat's model reads the list's papers and rewrites the description (Undo in the message
+  that follows). A list without a description offers **+ describe**. Open a list to **rename**
+  it, **merge** it into another list, or **delete** it, from the line above its papers. Each acts
+  at once and offers Undo; your papers are never deleted, only regrouped.
 - **Middle: Search and Chat.**
   - **Search** understands `Herwig 2008` (an author's papers from a year), `Herwig 2008-2012`,
     `convective overshoot 2020` (a topic in a year) and plain topics (ranked full-text).
   - **Chat** answers in plain language over your library. It can point you to the right lists,
     summarise a paper (it reads the PDF), open a paper in the viewer, search NASA ADS for papers you
-    don't have yet, and add a paper when you ask; a short "yes" to its offer to add a paper also
-    counts. It never writes a DOI or a BibTeX entry from memory: identifiers come from the library
+    don't have yet, add a paper when you ask, and organise your lists: *"merge s process into AGB
+    stars"*, *"rename IGWs to internal gravity waves"*, *"put 33 and 601 into a new list called
+    review"*. A short "yes" to its own offer also counts, for one change. Every list change comes
+    with an Undo button under the reply. It never writes a DOI or a BibTeX entry from memory: identifiers come from the library
     or ADS, and a BibTeX request is pointed at the paper's BibTeX link. Every turn is logged on your
     machine (`~/.cache/papers-web/chatlog/`).
 - **Right: the PDF viewer**, a tab per open paper. Up to four tabs stay side by side (fewer in a
@@ -202,13 +230,17 @@ Three panes, with dividers you can drag:
   paper. Above the PDF: the title (click for authors, lists and the abstract), one line of details
   that starts with the paper's **ID** (click it to copy), and the toolbar with
   **doi · arXiv · BibTeX · 💬 · + note**.
+  **Find** in the paper with ⌕ in the PDF toolbar, or ⌘F while the pointer is over the paper: every
+  hit is highlighted, Enter and ⇧Enter step through them, and ≡ lists each one with its context
+  and page. Phrases are found across line breaks and hyphenated words, ignoring case and accents.
   **Select a passage** to mark it with a comment, or drag a **region** (▭, or hold Alt) around a
   formula, table or figure. Marks are saved **with the paper** in your library, listed under 💬,
   and printed by `papers show`. *✎ mark* switches the offer off so you can copy text instead.
 
 **What the chat can and cannot do.** Its only tools are the library's own: search and read the
 library, search NASA ADS, and add a paper through the same verified `papers add` the command line
-uses. It cannot run commands, read your files, browse the web, or change anything else. It is
+uses, and change your lists when you ask (each change can be undone). It cannot delete a paper,
+change what a paper says, run commands, read your files or browse the web. It is
 started isolated from any other Claude Code setup you have (no plugins, skills or other tools). An
 add happens only on a turn where you asked for one, and a plain "yes" adds at most one paper. Full
 design and security model: [`web/README.md`](web/README.md).

@@ -39,11 +39,22 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
 .listrow:hover { background: var(--panel2); }
 .listrow .ln { font-weight: 500; }
 .listrow .lc { font-size: 11px; color: var(--muted); margin-left: 6px; }
+#listcard { position: fixed; z-index: 60; width: 340px; padding: 10px 12px; pointer-events: none;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, .45); font-size: 12.5px; line-height: 1.45; }
+#listcard .lc-name { font-weight: 600; margin-bottom: 4px; }
+#listcard .lc-blurb { color: var(--fg); }
+#listcard .lc-themes { margin-top: 6px; color: var(--muted); font-style: italic; }
+#listcard .lc-facts { margin-top: 6px; font-size: 11.5px; color: var(--muted); }
+#listcard .lc-stale { margin-top: 6px; font-size: 11.5px; color: var(--warn); }
 .listrow .lb { font-size: 11.5px; color: var(--muted); margin-top: 2px; display: -webkit-box;
   -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .chip { display: inline-block; font-size: 10px; padding: 1px 6px; margin: 3px 4px 0 0;
   border: 1px solid var(--line); border-radius: 10px; color: var(--muted); }
 .stale { color: var(--warn); }
+.chip.clk { cursor: pointer; }
+.chip.clk:hover { border-color: var(--amber); color: var(--amber); }
+.chip.busy { color: var(--amber); border-color: var(--amber); cursor: progress; }
 
 /* tabs + panes */
 #tabs { display: flex; gap: 2px; padding: 8px 10px 0; border-bottom: 1px solid var(--line); }
@@ -58,6 +69,13 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
 #q { width: 100%; padding: 9px 11px; background: var(--panel2); border: 1px solid var(--line);
   color: var(--fg); border-radius: 7px; font-size: 14px; }
 #resulthead { padding: 0 14px 6px; font-size: 12px; }
+#resulthead .rh-act { color: var(--muted); cursor: pointer; text-decoration: underline dotted; }
+#resulthead .rh-act:hover { color: var(--warn); }
+#resulthead .ied { margin-top: 2px; }
+#pickmenu input { width: 100%; margin-bottom: 4px; padding: 4px 8px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 5px; font: inherit; }
+.undos { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+.undos .pbtn:disabled { opacity: .6; cursor: default; }
 #results { overflow: auto; padding: 0 8px 12px; }
 .res { padding: 8px 10px; border-radius: 7px; cursor: pointer; border: 1px solid transparent; }
 .res:hover { background: var(--panel2); border-color: var(--line); }
@@ -105,18 +123,18 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
 .ptab .x:hover { color: var(--fg); }
 .ptab .lbl { overflow: hidden; text-overflow: ellipsis; }
 .ptab.more { color: var(--amber); }
-#tabmenu { position: fixed; z-index: 50; min-width: 320px; max-width: min(560px, 90vw); max-height: 60vh;
+#tabmenu, #pickmenu, #modelmenu { position: fixed; z-index: 50; min-width: 320px; max-width: min(560px, 90vw); max-height: 60vh;
   overflow: auto; padding: 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 7px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, .45); font-size: 12px; }
-#tabmenu .mi { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 5px;
+#tabmenu .mi, #pickmenu .mi, #modelmenu .mi { display: flex; align-items: baseline; gap: 8px; padding: 5px 8px; border-radius: 5px;
   cursor: pointer; white-space: nowrap; }
-#tabmenu .mi:hover { background: var(--panel2); }
-#tabmenu .mi.active { background: var(--bg); }
-#tabmenu .mi .num { color: var(--amber); font-family: var(--mono); min-width: 4ch; text-align: right; }
-#tabmenu .mi .au { color: var(--muted); }
-#tabmenu .mi .ti { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
-#tabmenu .mi .x { color: var(--muted); padding: 0 2px; }
-#tabmenu .mi .x:hover { color: var(--fg); }
+#tabmenu .mi:hover, #pickmenu .mi:hover, #modelmenu .mi:hover { background: var(--panel2); }
+#tabmenu .mi.active, #pickmenu .mi.active, #modelmenu .mi.active { background: var(--bg); }
+#tabmenu .mi .num, #pickmenu .mi .num, #modelmenu .mi .num { color: var(--amber); font-family: var(--mono); min-width: 4ch; text-align: right; }
+#tabmenu .mi .au, #pickmenu .mi .au, #modelmenu .mi .au { color: var(--muted); }
+#tabmenu .mi .ti, #pickmenu .mi .ti, #modelmenu .mi .ti { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+#tabmenu .mi .x, #pickmenu .mi .x, #modelmenu .mi .x { color: var(--muted); padding: 0 2px; }
+#tabmenu .mi .x:hover, #pickmenu .mi .x:hover, #modelmenu .mi .x:hover { color: var(--fg); }
 #detail { padding: 6px 12px 5px; font-size: 12px; border-bottom: 1px solid var(--line); max-height: 45%;
   overflow: auto; flex: 0 0 auto; }
 #detail a { color: var(--accent); text-decoration: none; cursor: pointer; }
@@ -164,9 +182,13 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
 .pbtn.off { color: var(--muted); text-decoration: line-through; }
 .pdfv-scale { font: 11px var(--mono); color: var(--muted); min-width: 38px; text-align: center; }
 .pdfv-pages { flex: 1; min-height: 0; overflow: auto; position: relative; display: flex; flex-direction: column;
-  align-items: center; gap: 14px; padding: 12px 0; }
+  align-items: flex-start; gap: 14px; padding: 12px 0; }
 .pdfv-stage { position: absolute; left: 0; top: 0; visibility: hidden; pointer-events: none; height: 0; overflow: hidden; }
-.pdfv-page { position: relative; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.4); flex: 0 0 auto; }
+/* auto margins centre a page narrower than the pane; a wider (zoomed) page then starts at the
+   left edge and overflows to the right, where it can be scrolled to. align-items: center pushed
+   half of it off the left edge, out of reach of the scrollbar. */
+.pdfv-page { position: relative; background: #fff; box-shadow: 0 1px 6px rgba(0,0,0,.4); flex: 0 0 auto;
+  margin-inline: auto; }
 .pdfv-page canvas { display: block; }
 .pdfv-note { color: var(--muted); font-size: 12px; padding: 6px 12px; }
 .pdfv-fallback { flex: 1; width: 100%; min-height: 70vh; border: none; }
@@ -196,6 +218,23 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
   pointer-events: none; border-radius: 2px; }
 /* marks: highlight rects take no pointer events, so text under a mark stays selectable */
 .pdfv-page .pdfv-notes { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.pdfv-find { display: none; flex-wrap: wrap; row-gap: 3px; align-items: center; gap: 4px; padding: 4px 10px; background: var(--panel);
+  border-bottom: 1px solid var(--line); }
+.pdfv-find.on { display: flex; }
+.pdfv-find input { flex: 0 1 280px; min-width: 120px; padding: 3px 8px; background: var(--bg); color: var(--fg);
+  border: 1px solid var(--line); border-radius: 5px; font: inherit; font-size: 12px; }
+.pdfv-find .cnt { font-size: 11.5px; color: var(--muted); min-width: 10ch; margin: 0 4px; }
+.pdfv-findlist { display: none; max-height: 30%; overflow: auto; background: var(--panel);
+  border-bottom: 1px solid var(--line); font-size: 12px; padding: 2px 0; }
+.pdfv-findlist.on { display: block; }
+.pdfv-findlist .fh { padding: 3px 12px; cursor: pointer; white-space: nowrap; overflow: hidden;
+  text-overflow: ellipsis; color: var(--muted); }
+.pdfv-findlist .fh:hover, .pdfv-findlist .fh.cur { background: var(--panel2); }
+.pdfv-findlist .fh b { color: var(--fg); font-weight: 600; }
+.pdfv-findlist .fh .pg { color: var(--accent); font-family: var(--mono); margin-right: 8px; }
+.pdfv-page .pdfv-findlayer { position: absolute; inset: 0; z-index: 2; pointer-events: none; }
+.pdfv-fhit { position: absolute; background: rgba(111,179,255,.38); border-radius: 2px; mix-blend-mode: multiply; }
+.pdfv-fhit.cur { background: rgba(60,140,255,.6); outline: 2px solid #3c8cff; }
 .pdfv-hl { position: absolute; background: rgba(225,175,55,.32); border-radius: 2px; mix-blend-mode: multiply; }
 .pdfv-hl.on { background: rgba(255,120,40,.5); outline: 2px solid var(--amber); }
 .pdfv-pin { position: absolute; pointer-events: auto; cursor: pointer; width: 16px; height: 16px; border-radius: 50%;
@@ -259,3 +298,9 @@ body.dragging iframe { pointer-events: none; }   /* so a drag over the PDF doesn
 .ied-btns .muted { margin-right: auto; font-size: 11px; }
 #toast .tbtn { margin-left: 12px; background: none; border: 1px solid var(--accent2); color: var(--accent);
   border-radius: 5px; padding: 1px 8px; cursor: pointer; font-size: 12px; }
+
+.modelbtn { background: none; border: none; padding: 0 2px; color: var(--fg); font: inherit; cursor: pointer; }
+.modelbtn:hover { color: var(--amber); }
+#modelmenu .mi.off { opacity: .55; cursor: default; }
+#modelmenu .mi .num { color: var(--ok); min-width: 1.5ch; }
+#modelmenu .mfoot { padding: 6px 8px 3px; border-top: 1px solid var(--line); margin-top: 4px; color: var(--muted); font-size: 11px; }

@@ -173,19 +173,145 @@ function renderLists(filter) {
     row.appendChild(head);
     if (meta.blurb) row.appendChild(el("div", "lb", meta.blurb));
     if (meta.domains) for (const d of meta.domains.split(",").map((s) => s.trim()).filter(Boolean).slice(0, 4)) row.appendChild(el("span", "chip", d));
-    if (meta.status === "stale") { const s = el("span", "chip stale", "⚠ blurb stale"); row.appendChild(s); }
-    row.onclick = () => loadList(l.name);
+    const chip = describeChip(l.name, meta);
+    if (chip) row.appendChild(chip);
+    row.onclick = () => { hideListCard(); loadList(l.name); };
+    row.onmouseenter = () => { clearTimeout(_lcTimer); _lcTimer = setTimeout(() => showListCard(row, l, meta), 350); };
+    row.onmouseleave = hideListCard;
     box.appendChild(row);
+  }
+}
+
+// The row has room for two lines of the description, so resting the pointer on a list shows all of
+// it beside the sidebar: a card in the page that follows the pointer away, never a browser pop-up.
+let _lcTimer = null;
+function showListCard(row, l, meta) {
+  hideListCard();
+  const c = el("div"); c.id = "listcard";
+  c.append(el("div", "lc-name", l.name));
+  c.append(meta.blurb ? el("div", "lc-blurb", meta.blurb) : el("div", "lc-blurb muted", "No description yet."));
+  if (meta.themes) c.append(el("div", "lc-themes", meta.themes));
+  const span = meta.ymin && meta.ymax ? (meta.ymin === meta.ymax ? String(meta.ymin) : `${meta.ymin}–${meta.ymax}`) : "";
+  c.append(el("div", "lc-facts", [`${l.n} papers`, `${l.pdf} PDFs`, span, meta.domains].filter(Boolean).join(" · ")));
+  if (meta.status === "stale")
+    c.append(el("div", "lc-stale", `Written when the list had ${meta.n_blurb ?? "?"} papers; it now has ${meta.n_members}.`));
+  document.body.append(c);
+  const r = row.getBoundingClientRect(), side = $("#lists").getBoundingClientRect();
+  c.style.left = `${side.right + 8}px`;
+  c.style.top = `${Math.max(8, Math.min(r.top, innerHeight - c.offsetHeight - 8))}px`;
+}
+function hideListCard() { clearTimeout(_lcTimer); const c = $("#listcard"); if (c) c.remove(); }
+$("#lists").addEventListener("scroll", hideListCard);
+
+// A list's description (its blurb) goes stale when the list has changed substantially since it was
+// written. The chip rewrites it: the model reads the list's papers, the new description is saved at
+// once, and the toast offers Undo (never a pop-up asking first). A list with none gets "+ describe".
+function describeChip(name, meta) {
+  const can = CONFIG.writable && CONFIG.chat;
+  if (meta.status === "stale") {
+    const s = el("span", "chip stale", "⚠ blurb stale");
+    const drift = `The list has changed since this description was written (${meta.n_blurb ?? "?"} → ${meta.n_members} papers).`;
+    if (!can) { s.title = `${drift} Rewrite it with /papers in Claude Code.`; return s; }
+    s.classList.add("clk"); s.title = `${drift} Click to rewrite it from the list's papers.`;
+    s.onclick = (ev) => { ev.stopPropagation(); describeList(name, s); };
+    return s;
+  }
+  if (meta.status === "no-blurb" && can) {
+    const s = el("span", "chip clk", "+ describe");
+    s.title = "Click to have the model describe this list from its papers.";
+    s.onclick = (ev) => { ev.stopPropagation(); describeList(name, s); };
+    return s;
+  }
+  return null;
+}
+
+async function describeList(name, chip) {
+  chip.textContent = "↻ describing…"; chip.classList.add("busy");
+  chip.onclick = (ev) => ev.stopPropagation();
+  try {
+    const r = await api("/api/lists/describe", { method: "POST", body: { name } });
+    await reloadLists();
+    changedToast(`New description for ${name}`, r.undo);
+  } catch (e) {
+    toast(`${name}: ${e.message || e}`);
+    renderLists($("#listfilter").value);
   }
 }
 
 async function loadList(name) {
   switchPane("search");
   $("#q").value = "";
-  $("#resulthead").textContent = `list: ${name}`;
+  listHead(name);
   try { renderResults(await api(`/api/search?list=${encodeURIComponent(name)}&limit=300`)); }
   catch (e) { $("#results").textContent = String(e); }
 }
+
+// The open list's header: rename (inline), merge into another list (a menu of the lists), delete.
+// Each acts at once and the toast offers Undo; papers are never deleted or changed, only grouped.
+function listHead(name) {
+  const head = $("#resulthead"); head.textContent = `list: ${name}`;
+  if (!CONFIG.writable) return;
+  const act = (label, title, fn) => { const a = el("a", "rh-act", label); a.title = title; a.onclick = fn; head.append(" · ", a); return a; };
+  act("rename", "Rename this list; its papers and description go with it.", () => {
+    head.textContent = "";
+    const ed = inlineEditor({ initial: name, saveLabel: "Rename", onCancel: () => listHead(name),
+      onSave: async (v) => { await listChange("rename", { name, new_name: v }, () => loadList(name)); loadList(v); } });
+    head.append(ed); ed._focus();
+  });
+  const mg = act("merge into ▾", "Move this list's papers into another list, then remove this one.", () =>
+    openListPicker(mg, name, async (into) => { await listChange("merge", { from: name, into }, () => loadList(name)); loadList(into); }));
+  act("delete list", "Delete this list. Its papers stay in the library, and Undo brings the list back.", async () => {
+    try { await listChange("delete", { name }, () => loadList(name)); }
+    catch (e) { toast(String(e.message || e)); return; }
+    $("#resulthead").textContent = `list ${name} deleted`; $("#results").textContent = "";
+  });
+}
+
+// One list change through the server, then the toast with Undo. `back` reopens what Undo restores.
+async function listChange(op, body, back) {
+  const r = await api(`/api/lists/${op}`, { method: "POST", body });
+  await reloadLists();
+  changedToast(r.label, r.undo, back);
+  return r;
+}
+function changedToast(label, uid, back) {
+  toast(label.charAt(0).toUpperCase() + label.slice(1), { label: "Undo", run: () => undoChange(uid, back) });
+}
+async function undoChange(uid, back) {
+  const r = await api("/api/lists/undo", { method: "POST", body: { id: uid } });
+  await reloadLists(); toast(`Undone: ${r.label}`);
+  if (back) back();
+  return r;
+}
+
+// Pick a list to merge into: an in-page menu with a filter (Enter takes the first match).
+function openListPicker(anchor, exclude, onPick) {
+  closeListPicker();
+  const m = el("div"); m.id = "pickmenu";
+  const f = el("input"); f.type = "search"; f.placeholder = "merge into which list?";
+  const rows = el("div");
+  const draw = () => {
+    rows.textContent = ""; const q = f.value.toLowerCase();
+    for (const l of LISTS) {
+      if (l.name === exclude || (q && !l.name.toLowerCase().includes(q))) continue;
+      const r = el("div", "mi"); r.append(el("span", "ti", l.name), el("span", "au", `${l.n} papers`));
+      r.onclick = () => { closeListPicker(); onPick(l.name).catch((e) => toast(String(e.message || e))); };
+      rows.append(r);
+    }
+  };
+  f.oninput = draw;
+  f.onkeydown = (e) => { e.stopPropagation();
+    if (e.key === "Escape") closeListPicker();
+    if (e.key === "Enter") { e.preventDefault(); const first = rows.querySelector(".mi"); if (first) first.click(); } };
+  m.append(f, rows); document.body.append(m); draw();
+  const r = anchor.getBoundingClientRect();
+  m.style.top = `${r.bottom + 4}px`;
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  f.focus();
+  setTimeout(() => document.addEventListener("mousedown", pickOutside, true), 0);
+}
+function closeListPicker() { const m = $("#pickmenu"); if (m) m.remove(); document.removeEventListener("mousedown", pickOutside, true); }
+function pickOutside(ev) { if (!ev.target.closest("#pickmenu")) closeListPicker(); }
 
 // ===================== search =====================
 function renderResults(rows) {
@@ -634,6 +760,20 @@ function runSearch(q) {
   $("#searchform").requestSubmit();
 }
 
+// An Undo under the chat's reply for each list change it made. Outside the bubble, which is
+// re-rendered as text streams in. The undo is noted in the history so the chat knows next turn.
+function addUndo(bubble, u) {
+  let box = bubble.nextElementSibling;
+  if (!box || !box.classList.contains("undos")) { box = el("div", "undos"); bubble.after(box); }
+  const b = el("button", "pbtn", `↶ Undo: ${u.label}`);
+  b.onclick = async () => {
+    b.disabled = true;
+    try { await undoChange(u.id); b.textContent = `Undone: ${u.label}`; chatHistory.push({ role: "user", text: `(I undid: ${u.label})` }); }
+    catch (e) { b.disabled = false; toast(String(e.message || e)); }
+  };
+  box.append(b);
+}
+
 async function sendChat(message) {
   if (chatBusy || !message) return;
   chatBusy = true; $("#chatsend").disabled = true;
@@ -665,7 +805,8 @@ async function sendChat(message) {
         let obj; try { obj = JSON.parse(dl.slice(5).trim()); } catch (_e) { continue; }
         if (obj.open) { openPaper(obj.open); }          // server asked the UI to open a paper's PDF
         if (obj.status) { status(obj.status); }
-        if (obj.refresh) { reloadLists(); }             // a paper was added: counts/lists changed
+        if (obj.refresh) { reloadLists(); }             // a paper was added or a list changed
+        if (obj.undo) { addUndo(bubble, obj.undo); }    // the chat changed a list: its Undo goes under the reply
         if (obj.text) { raw += obj.text; bubble.innerHTML = renderMd(raw); $("#transcript").scrollTop = $("#transcript").scrollHeight; }
         if (obj.done) { /* stream end */ }
       }
@@ -769,15 +910,60 @@ async function reloadLists() {
   } catch (e) { $("#lists").textContent = String(e); }
 }
 
+// ===================== the chat's model (top bar) =====================
+// "chat: claude-sonnet-5-5 ▾" switches between the models in the profile on the spot (the server
+// also makes the choice the default). Models are added in the terminal: papers model add.
+function renderChatState() {
+  const cs = $("#chatstate"); cs.textContent = "chat: "; cs.title = "";
+  const b = el("button", "modelbtn", `${CONFIG.chat ? CONFIG.model : "off"} ▾`);
+  b.title = CONFIG.chat ? "Switch the chat's model" : `${CONFIG.chat_why || "chat unavailable"}. Click to pick another model.`;
+  b.onclick = (e) => { e.stopPropagation(); if ($("#modelmenu")) closeModelMenu(); else openModelMenu(b); };
+  cs.append(b);
+  if (CONFIG.chat) cs.append(" · library + ADS" + (CONFIG.writable ? " · can add" : " · read-only library"));
+  $("#chattab").disabled = !CONFIG.chat;
+  $("#chattab").title = CONFIG.chat ? "" : CONFIG.chat_why || "chat unavailable";
+}
+
+function openModelMenu(btn) {
+  closeModelMenu();
+  const m = el("div"); m.id = "modelmenu";
+  for (const x of CONFIG.models || []) {
+    const cur = x.name === CONFIG.current;
+    const r = el("div", "mi" + (cur ? " active" : "") + (x.ok ? "" : " off"));
+    r.append(el("span", "num", cur ? "✓" : ""), el("span", "ti", x.name), el("span", "au", x.ok ? x.label : x.why));
+    r.title = x.ok ? (cur ? "in use" : `Use ${x.label}`) : x.why;
+    if (x.ok && !cur) r.onclick = async () => {
+      closeModelMenu();
+      try {
+        CONFIG = await api("/api/model", { method: "POST", body: { name: x.name } });
+        renderChatState(); toast(`The chat now uses ${x.name} (${CONFIG.model})`);
+      } catch (e) { toast(String(e.message || e)); }
+    };
+    m.append(r);
+  }
+  m.append(el("div", "mfoot", "Add a model in the terminal: papers model add NAME --backend claude|velella|openai"));
+  document.body.append(m);
+  const r = btn.getBoundingClientRect();
+  m.style.top = `${r.bottom + 4}px`;
+  m.style.left = `${Math.max(8, Math.min(r.left, innerWidth - m.offsetWidth - 8))}px`;
+  setTimeout(() => document.addEventListener("mousedown", modelMenuOutside, true), 0);
+  document.addEventListener("keydown", modelMenuKey, true);
+}
+function closeModelMenu() {
+  const m = $("#modelmenu"); if (m) m.remove();
+  document.removeEventListener("mousedown", modelMenuOutside, true);
+  document.removeEventListener("keydown", modelMenuKey, true);
+}
+function modelMenuOutside(ev) { if (!ev.target.closest("#modelmenu, .modelbtn")) closeModelMenu(); }
+function modelMenuKey(ev) { if (ev.key === "Escape") { ev.stopPropagation(); closeModelMenu(); } }
+
 // ===================== boot =====================
 (async function boot() {
   try {
     const cfg = await api("/api/config");
     CONFIG = cfg;
     $("#lib").textContent = cfg.lib;
-    if (cfg.chat) $("#chatstate").textContent = `chat: ${cfg.model} · library + ADS` + (cfg.writable ? " · can add" : " · read-only library");
-    else { $("#chatstate").textContent = "chat: off"; $("#chatstate").title = cfg.chat_why || "";
-           $("#chattab").disabled = true; $("#chattab").title = cfg.chat_why || "chat unavailable"; }
+    renderChatState();
   } catch (e) {
     document.body.innerHTML = `<div style="padding:40px;color:#e88">Could not reach the server or the token is invalid.<br><small>${escapeHtml(String(e))}</small></div>`;
     return;

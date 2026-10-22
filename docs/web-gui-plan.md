@@ -98,6 +98,19 @@ papers.py · library.db · pdfs/            ← engine + data (exists)
 Cloud hosting, multi-user auth, mobile, in-PDF annotation (M4+), citation-insertion word-processor
 plugins.
 
+## Policy update (2026-10-16): the chat may change what a button can change
+
+The June decision below ("explore the corpus, never mutate the library") rested on two facts that
+no longer hold: the only tool mechanism was scoped Bash, and nothing could be undone. The chat's
+tools are now named functions in `web/chat_tools.py` (the model names a tool, the server decides),
+the first write (`add_paper`, October) proved the gate, and list changes are snapshotted and
+undoable. New policy: **the chat may do what the user could do with a button, when the user asks,
+and every change can be undone; it never deletes a paper and never changes what a paper says.**
+What stays protected: paper records (they come only from the authorities, through the admission
+gate), the papers themselves, the user's deliberate steps (overrides, audits, syncs), and
+everything outside the library. Each write is offered only on a turn whose own user message asks
+for it, so text inside a paper cannot trigger one.
+
 ## Build decisions (2026-06-21)
 Resolved the open questions during implementation:
 - **Chat backend = Safe RAG, not a tool-wielding agent.** Per-decision, GUI model access is "explore

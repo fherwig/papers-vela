@@ -118,9 +118,12 @@ Three supported backends, none privileged:
 Do not hardcode any specific path as "the" library in shared code or docs — it's per-user config.
 
 **Profile.** Everything about one user lives in `~/.config/papers/profile.json` (or
-`$PAPERS_PROFILE`): `library`, `email`, `ads_token_file`, `chat` (backend `claude` | `velella` |
-`openai`, model, url, key_file), optional `remote` (the `sync-trillium` host and path), optional
-`port`. `papers init` writes it; `papers profile` shows it. Environment variables still win. No
+`$PAPERS_PROFILE`): `library`, `email`, `ads_token_file`, `models` (named chat models, each with
+backend `claude` | `velella` | `openai`, model, url, key_file) and `chat` (the default's name),
+optional `remote` (the `sync-trillium` host and path), optional `port`. A profile from before named
+models (`chat` as one object) still reads, as a single model; `papers.chat_models()` is the one
+reader. `papers model` manages the models; the web app's top bar switches (`switch_model`, saved as
+the default). `papers init` writes it; `papers profile` shows it. Environment variables still win. No
 personal path, account or host belongs in the code; put it in the profile. `generate_outputs.py`
 and `rebuild_bylist.py` now take the library from `papers.LIB` like everything else (the old
 "known drift", where `papers bib` needed `PAPERS_LIB` set, is fixed).
@@ -351,15 +354,30 @@ What a contributor must not quietly weaken:
 
 - **Browse is reads through the engine.** Every endpoint calls the same `query_*` function the
   CLI uses (`import papers as eng`), so GUI and CLI can never disagree. Don't write fresh SQL in the
-  server; add a `query_*` to `papers.py` and call it. Its writes are human-initiated and few: the
-  Download-PDF button, and **comments** (marks made in the PDF viewer), both refused on a read-only
-  library.
+  server; add a `query_*` to `papers.py` and call it. Its writes are human-initiated: the
+  Download-PDF button, **comments** (marks made in the PDF viewer), and **list changes** from the
+  list header (rename, merge into, delete) and the description chip ("⚠ blurb stale" / "+ describe":
+  `describe_list` has the configured model write it via `complete()`, no tools), all refused on a
+  read-only library. A blurb is stale only past `papers.blurb_status`'s threshold (a fifth of the
+  list, or five papers).
+- **Every list change can be undone, and none touches a paper.** Buttons and chat tools alike go
+  through `chat_tools.list_change`: it takes `papers.snapshot_lists` of the lists involved, makes
+  the change (`rename_list`, `merge_lists`, `delete_list`, `file_papers`, `set_summary`), and stores
+  the snapshot as an Undo (`~/.cache/papers-web/undo/<id>.json`, shared by the server and the chat's
+  tool process; two days). `apply_undo` hands it to `restore_lists`. After any list change the
+  server runs `papers bib` in the background, debounced (`schedule_bib`), so INDEX.md and the
+  per-list pages follow; `generate_outputs` removes pages of lists that no longer exist.
 - **Marks are the paper's comments, in `library.db` — never in the PDF.** The viewer
   (`web/static/pdfview.js`, ported from the session-dashboard kit, pdf.js vendored under
   `web/static/vendor/pdfjs/`) saves each mark through `papers.add_comment`: page, the QUOTE, the
   note, and rects in page space at scale 1. Writing into the PDF would break the Trillium rsync
   (it relies on PDFs never being edited in place) and the Zotero backend (Zotero owns those files).
   `papers show` and the chat's `show_paper` list them. `trillium_sync` does not carry comments yet.
+- **Find in a paper reads the text layer, never changes it.** `pageIndex` in `pdfview.js` flattens
+  each page's text layer into one folded string (case, accents, ligatures, whitespace, line-end
+  hyphens) mapped back to (text node, offset); hits are boxes drawn from DOM-range client rects in
+  a `.pdfv-findlayer`. Wrapping hits in `<mark>` (the kit's way) would split the spans pdf.js placed
+  and miss every phrase that crosses a span or a line, which in a PDF is most of them.
 - **The chat's rules are the /papers rules, one copy.** They live in the RULES block of
   `skill/SKILL.md`; `skill_rules()` reads that block (from the repo, never the installed skill) into
   the chat's instructions on every turn, for every backend, and `chat_available()` turns the chat
@@ -381,10 +399,17 @@ What a contributor must not quietly weaken:
   `--disable-slash-commands`: no built-ins, no user plugins/skills/hooks/CLAUDE.md, no other MCP
   server. Name what is *allowed*; a deny-list of built-ins leaked the user's MCP tools (a plugin's
   web search answered in the "read-only" chat, 2026-10-06). `chat_tools.py` wraps `query_*`, ADS
-  search and `papers add` — never a shell, file read or URL fetch. Its one write, `add_paper`, runs
-  the real `papers add` (gate included, never `--force-unverified`) and is offered only when the
-  library is writable and the user's own message asks (`ADD_INTENT`) or answers the chat's own
-  offer to add with a short yes (`asks_to_add`). Every turn is appended to a local JSONL log,
+  search, `papers add` and the list changes — never a shell, file read or URL fetch. **Policy
+  (2026-10-16, replacing June's "explore, never mutate"): the chat may do what the user could do
+  with a button, when the user asks, and every change can be undone; it never deletes a paper and
+  never changes what a paper says.** So its writes are `add_paper` (the real `papers add`, gate
+  included, never `--force-unverified`) and the list tools (`file_papers`, `rename_list`,
+  `merge_lists`, `delete_list`, `set_list_description`, each through `list_change`, each answered
+  with an Undo button under the reply via the `[undo:<id>]` marker and `undo_signal`). Each kind is
+  offered only when the library is writable and the user's own message asks for it (`ADD_INTENT`,
+  `LIST_INTENT`) or answers the chat's own offer with a short yes (`asks_to_add`,
+  `asks_to_organise`); a yes allows ONE add or ONE list change (`budget`, enforced in `call_tool`).
+  Text inside a paper therefore never triggers a change. Every turn is appended to a local JSONL log,
   `~/.cache/papers-web/chatlog/chat-YYYY-MM-DD.jsonl` (message, server context, each tool call and
   result, answer, cost): read it to see what the chat actually did. `PAPERS_WEB_CHATLOG=0` disables.
 - **Three independent access layers:** loopback-only bind, per-launch token (`secrets.compare_digest`)

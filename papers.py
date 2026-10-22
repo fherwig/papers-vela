@@ -15,13 +15,15 @@ Commands:
   add <doi|arxiv|bibcode> [--list L] [--pdf]                      add metadata (PDF on demand; --pdf to fetch now)
   attach <id> <file> [--force]                                   file an existing local PDF onto a paper
   tag <id|doi|arxiv|bibcode> --list L [--list L2] [--remove]      (un)tag an existing paper to list(s)
+  rename-list OLD NEW | merge-lists FROM INTO | delete-list L [--force]   organise lists (papers stay)
   refresh <id|doi|arxiv|bibcode> | --missing-year                 re-fetch metadata to fill blanks (e.g. year)
   gaps [--fetch-arxiv]                                            current papers lacking a PDF
   bib                                                             regenerate references.bib + index
   stats                                                           library overview
   clean                                                           normalize title/journal/abstract (strip import artifacts)
-  init [--library P] [--email E] [--backend claude|velella]       set up your profile (and a new library)
+  init [--library P] [--email E] [--backend claude|velella] [--model M]   set up your profile (and a new library)
   profile                                                         show your profile, and your key's fingerprint
+  model [use|add|remove|served NAME] [--backend B --model M --url U --key-file F]   the chat's models
   web [stop|status] [--port N]                                    open the web app, starting it if needed
   serve [--port N] [--no-open]                                    run the web server in the foreground
   sync-trillium [--dry-run] [--no-pdfs]                           merge with a remote copy (profile "remote")
@@ -394,6 +396,172 @@ def query_list(c, name):
         "WHERE l.name=? ORDER BY p.year DESC, p.id", (name,)).fetchall()
 
 
+# A list's blurb is stale only when the list changed SUBSTANTIALLY since the blurb was written: by a
+# fifth of its size, or by five papers. Flagging every one-paper change put the warning on 52 of 62
+# lists (2026-10-16), half of them changed by one or two papers, and a warning on nearly every list
+# is one nobody reads.
+STALE_FRACTION, STALE_PAPERS = 0.2, 5
+
+
+def blurb_status(blurb, n_blurb, n_members):
+    """ok | stale | no-blurb for a list whose blurb described n_blurb papers and which has n_members."""
+    if not blurb:
+        return "no-blurb"
+    d = abs((n_members or 0) - (n_blurb or 0))
+    return "stale" if d >= STALE_PAPERS or d >= STALE_FRACTION * max(1, n_blurb or 0) else "ok"
+
+
+KEEP = object()   # set_summary: leave this field as it is
+
+
+def set_summary(c, name, blurb=KEEP, themes=KEEP, domains=KEEP, n_blurb=KEEP):
+    """Write a list's description. A field passed as KEEP (the default) keeps its current value, so
+    updating the themes never erases the blurb. n_blurb, the list size the blurb describes, defaults
+    to the list's size now, which is what marks the blurb current."""
+    ensure_summary_table(c)
+    row = c.execute("SELECT blurb, themes, domains FROM list_summary WHERE name=?", (name,)).fetchone()
+    cur = dict(row) if row else {}
+    if n_blurb is KEEP:
+        n_blurb = c.execute("SELECT COUNT(*) FROM paper_lists pl JOIN lists l ON l.id=pl.list_id "
+                            "WHERE l.name=?", (name,)).fetchone()[0]
+    vals = [cur.get(k) if v is KEEP else v for k, v in (("blurb", blurb), ("themes", themes), ("domains", domains))]
+    c.execute("INSERT INTO list_summary(name,blurb,themes,domains,n_blurb) VALUES(?,?,?,?,?) "
+              "ON CONFLICT(name) DO UPDATE SET blurb=excluded.blurb,themes=excluded.themes,"
+              "domains=excluded.domains,n_blurb=excluded.n_blurb", (name, *vals, n_blurb))
+    c.commit()
+
+
+# ---- list changes: every one can be undone ------------------------------------------------
+# A list change regroups papers; it never deletes a paper or changes what a paper says. Callers
+# take snapshot_lists() of the lists a change touches first, and restore_lists() puts them back:
+# that one pair is the Undo for rename, merge, delete, filing and descriptions alike.
+def snapshot_lists(c, names):
+    """The state of these lists (source, member ids, description); None for a list that doesn't exist."""
+    ensure_summary_table(c)
+    out = {}
+    for name in dict.fromkeys(names):
+        row = c.execute("SELECT id, source FROM lists WHERE name=?", (name,)).fetchone()
+        summ = c.execute("SELECT * FROM list_summary WHERE name=?", (name,)).fetchone()
+        out[name] = None if not row else {
+            "source": row["source"],
+            "papers": [r[0] for r in c.execute("SELECT paper_id FROM paper_lists WHERE list_id=?", (row["id"],))],
+            "summary": dict(summ) if summ else None}
+    return out
+
+
+def restore_lists(c, snap):
+    """Put lists back as snapshot_lists saw them: each list that existed has exactly those papers
+    (the ones still in the library) and that description; a list that didn't exist is removed."""
+    ensure_summary_table(c)
+    cols = {r[1] for r in c.execute("PRAGMA table_info(list_summary)")}
+    for name, st in snap.items():
+        row = c.execute("SELECT id FROM lists WHERE name=?", (name,)).fetchone()
+        c.execute("DELETE FROM list_summary WHERE name=?", (name,))
+        if st is None:
+            if row:
+                c.execute("DELETE FROM paper_lists WHERE list_id=?", (row["id"],))
+                c.execute("DELETE FROM lists WHERE id=?", (row["id"],))
+            continue
+        lid = row["id"] if row else c.execute(
+            "INSERT INTO lists(name, source, n_members) VALUES(?,?,0)", (name, st.get("source") or "manual")).lastrowid
+        c.execute("DELETE FROM paper_lists WHERE list_id=?", (lid,))
+        c.executemany("INSERT OR IGNORE INTO paper_lists(paper_id, list_id) SELECT ?, ? "
+                      "WHERE EXISTS (SELECT 1 FROM papers WHERE id=?)", [(p, lid, p) for p in st["papers"]])
+        if st.get("summary"):
+            summ = {k: v for k, v in st["summary"].items() if k in cols}
+            c.execute(f"INSERT INTO list_summary({','.join(summ)}) VALUES({','.join('?' * len(summ))})",
+                      list(summ.values()))
+    c.commit()
+    reindex_lists(c, [n for n, st in snap.items() if st])
+
+
+def _list_id(c, name):
+    row = c.execute("SELECT id FROM lists WHERE name=?", (name,)).fetchone()
+    if not row:
+        raise ValueError(f"no list named {name!r}")
+    return row["id"]
+
+
+def rename_list(c, old, new):
+    """Rename a list in place; its papers and description go with it. Returns its paper count."""
+    new = " ".join((new or "").split())
+    lid = _list_id(c, old)
+    if not new or new == old:
+        raise ValueError("give the list a different, non-empty name")
+    if c.execute("SELECT 1 FROM lists WHERE name=?", (new,)).fetchone():
+        raise ValueError(f"a list named {new!r} already exists (merge the two instead)")
+    n = c.execute("SELECT COUNT(*) FROM paper_lists WHERE list_id=?", (lid,)).fetchone()[0]
+    c.execute("UPDATE lists SET name=? WHERE id=?", (new, lid))
+    ensure_summary_table(c)
+    c.execute("UPDATE list_summary SET name=? WHERE name=?", (new, old))
+    c.commit(); reindex_lists(c, [new])
+    return n
+
+
+def merge_lists(c, src, dst):
+    """Move every paper of list `src` into list `dst`, then delete `src`. `dst` keeps its name and
+    description. Returns (papers in src, of those newly in dst)."""
+    sid, did = _list_id(c, src), _list_id(c, dst)
+    if sid == did:
+        raise ValueError("a list cannot be merged into itself")
+    pids = [r[0] for r in c.execute("SELECT paper_id FROM paper_lists WHERE list_id=?", (sid,))]
+    before = c.execute("SELECT COUNT(*) FROM paper_lists WHERE list_id=?", (did,)).fetchone()[0]
+    c.executemany("INSERT OR IGNORE INTO paper_lists(paper_id, list_id) VALUES(?,?)", [(p, did) for p in pids])
+    after = c.execute("SELECT COUNT(*) FROM paper_lists WHERE list_id=?", (did,)).fetchone()[0]
+    c.execute("DELETE FROM paper_lists WHERE list_id=?", (sid,))
+    c.execute("DELETE FROM lists WHERE id=?", (sid,))
+    ensure_summary_table(c)
+    c.execute("DELETE FROM list_summary WHERE name=?", (src,))
+    c.commit(); reindex_lists(c, [dst])
+    return len(pids), after - before
+
+
+def delete_list(c, name):
+    """Delete a list: its memberships and its description; the papers stay. Returns how many
+    papers it had."""
+    lid = _list_id(c, name)
+    n = c.execute("SELECT COUNT(*) FROM paper_lists WHERE list_id=?", (lid,)).fetchone()[0]
+    c.execute("DELETE FROM paper_lists WHERE list_id=?", (lid,))
+    c.execute("DELETE FROM lists WHERE id=?", (lid,))
+    ensure_summary_table(c)
+    c.execute("DELETE FROM list_summary WHERE name=?", (name,))
+    c.commit()
+    return n
+
+
+def file_papers(c, ids, name, remove=False):
+    """File library papers into list `name` (a new name creates it), or take them out with remove.
+    Returns (ids changed, ids not in the library)."""
+    name = " ".join((name or "").split())
+    if not name:
+        raise ValueError("give a list name")
+    if remove:
+        _list_id(c, name)
+    changed, missing = [], []
+    for pid in dict.fromkeys(int(i) for i in ids):
+        if not c.execute("SELECT 1 FROM papers WHERE id=?", (pid,)).fetchone():
+            missing.append(pid)
+        elif (untag_paper if remove else tag_paper)(c, pid, [name]):
+            changed.append(pid)
+    c.commit(); reindex_lists(c, [name])
+    return changed, missing
+
+
+def query_summary(c, name):
+    """The stored description of one list (blurb, themes, domains, n_blurb), or {}."""
+    ensure_summary_table(c)
+    row = c.execute("SELECT blurb, themes, domains, n_blurb FROM list_summary WHERE name=?", (name,)).fetchone()
+    return dict(row) if row else {}
+
+
+def query_domain_tags(c):
+    """Every domain tag in use across the lists' descriptions, sorted."""
+    ensure_summary_table(c)
+    tags = {t.strip() for (d,) in c.execute("SELECT domains FROM list_summary WHERE domains != ''")
+            for t in (d or "").split(",") if t.strip()}
+    return sorted(tags)
+
+
 def query_index(c, domain=None, grep=None, refresh=True):
     """Routing view: one dict per list (blurb/themes/domains/counts/span/anchors) plus a
     computed `status` of ok|stale|no-blurb. Refresh recomputes the cheap auto layer first."""
@@ -415,7 +583,7 @@ def query_index(c, domain=None, grep=None, refresh=True):
             if grep.lower() not in hay:
                 continue
         d = rowdict(r)
-        d["status"] = "ok" if (r["blurb"] and r["n_blurb"] == r["n_members"]) else ("stale" if r["blurb"] else "no-blurb")
+        d["status"] = blurb_status(r["blurb"], r["n_blurb"], r["n_members"])
         out.append(d)
     out.sort(key=lambda d: -(d["n_members"] or 0))
     return out
@@ -1105,29 +1273,18 @@ def cmd_index(a):
 
 
 def cmd_setsummary(a):
-    c = db(); ensure_summary_table(c)
-    row = c.execute("SELECT n_members FROM list_summary WHERE name=?", (a.name,)).fetchone()
-    nb = row["n_members"] if row else None
-    c.execute(
-        "INSERT INTO list_summary(name,blurb,themes,domains,n_blurb) VALUES(?,?,?,?,?) "
-        "ON CONFLICT(name) DO UPDATE SET blurb=excluded.blurb,themes=excluded.themes,"
-        "domains=excluded.domains,n_blurb=excluded.n_blurb",
-        (a.name, a.blurb, a.themes, a.domains, nb))
-    c.commit(); print(f"summary set for {a.name}")
+    # An option left out keeps its value (it used to erase it: `set-summary L --themes x` wiped the blurb).
+    c = db()
+    set_summary(c, a.name, *(KEEP if v is None else v for v in (a.blurb, a.themes, a.domains)))
+    print(f"summary set for {a.name}")
 
 
 def cmd_loadsum(a):
     c = db(); ensure_summary_table(c)
     data = json.load(open(a.file))
     for d in data:
-        row = c.execute("SELECT n_members FROM list_summary WHERE name=?", (d["name"],)).fetchone()
-        nb = row["n_members"] if row else None
-        c.execute(
-            "INSERT INTO list_summary(name,blurb,themes,domains,n_blurb) VALUES(?,?,?,?,?) "
-            "ON CONFLICT(name) DO UPDATE SET blurb=excluded.blurb,themes=excluded.themes,"
-            "domains=excluded.domains,n_blurb=excluded.n_blurb",
-            (d["name"], d.get("blurb"), d.get("themes"), d.get("domains"), nb))
-    c.commit(); print(f"loaded {len(data)} summaries")
+        set_summary(c, d["name"], *(d[k] if k in d else KEEP for k in ("blurb", "themes", "domains")))
+    print(f"loaded {len(data)} summaries")
 
 
 def cmd_clean(a):
@@ -1228,12 +1385,178 @@ def _write_private(path, text):
     os.chmod(path, 0o600)
 
 
+# ---- the chat's models ------------------------------------------------------------------
+# The profile holds any number of named models and names one as the default:
+#   "models": {"sonnet": {"backend": "claude", "model": "claude-sonnet-5-5"},
+#              "velella": {"backend": "velella"},
+#              "mine": {"backend": "openai", "url": "https://host/v1", "key_file": "~/.config/x/key"}},
+#   "chat": "sonnet"
+# A profile from before named models (one "chat": {...} object) reads as a single model. `papers
+# model` manages them; the web app's top bar switches between them.
+CLAUDE_DEFAULT_MODEL = "claude-sonnet-5-5"
+CLAUDE_MODELS = ("claude-sonnet-5-5", "claude-opus-5-5", "claude-haiku-5-5")
+CHAT_BACKENDS = ("claude", "velella", "openai")
+
+
+def model_defaults(m):
+    """A model entry with what its backend implies filled in."""
+    m = dict(m)
+    m.setdefault("backend", "claude")
+    if m["backend"] == "claude":
+        m.setdefault("model", CLAUDE_DEFAULT_MODEL)
+    else:
+        if m["backend"] == "velella":
+            m.setdefault("url", VELELLA_URL)
+        m.setdefault("key_file", "~/.config/spigot/key")
+    return m
+
+
+def model_slug(m):
+    """A name for a model entry: 'sonnet' for claude-sonnet-5-5, else its backend."""
+    if (m.get("backend") or "claude") == "claude":
+        mm = re.match(r"claude-([a-z]+)", m.get("model") or CLAUDE_DEFAULT_MODEL)
+        return mm.group(1) if mm else "claude"
+    return m["backend"]
+
+
+def chat_models():
+    """(models {name: entry}, the default's name), entries with their defaults filled in."""
+    prof = load_profile()
+    models = {k: dict(v) for k, v in (prof.get("models") or {}).items() if isinstance(v, dict)}
+    chat = prof.get("chat")
+    default = chat if isinstance(chat, str) and chat in models else None
+    if isinstance(chat, dict) and chat:                  # a profile from before named models
+        default = model_slug(chat)
+        models.setdefault(default, dict(chat))
+    if not models:
+        models = {"sonnet": {"backend": "claude", "model": CLAUDE_DEFAULT_MODEL}}
+    return {k: model_defaults(v) for k, v in models.items()}, default if default in models else next(iter(models))
+
+
+def save_models(models, default):
+    """Write the models and the default into the profile, keeping everything else in it."""
+    prof = load_profile()
+    prof["models"], prof["chat"] = models, default
+    _write_private(PROFILE_PATH, json.dumps(prof, indent=2) + "\n")
+    PROFILE.clear(); PROFILE.update(prof)
+
+
+def find_claude():
+    """The claude CLI, where installers put it (PATH may only carry a shell function)."""
+    return shutil.which("claude") or next((p for p in (os.path.expanduser("~/.local/bin/claude"),
+                                                       os.path.expanduser("~/.claude/local/claude"),
+                                                       "/usr/local/bin/claude", "/opt/homebrew/bin/claude")
+                                           if os.path.exists(p)), None)
+
+
+def model_ready(m):
+    """(ok, why-not) for one model entry: Claude Code installed, or a key for the endpoint."""
+    if m["backend"] == "claude":
+        return (True, "") if find_claude() else (False, "Claude Code is not installed (claude CLI not found)")
+    if not key_fingerprint(m["key_file"]):
+        return False, f"no key at {m['key_file']}"
+    return True, ""
+
+
+def served_models(m):
+    """The model ids an OpenAI-compatible endpoint serves (GET /models)."""
+    req = urllib.request.Request(m["url"].rstrip("/") + "/models", headers={
+        "Authorization": "Bearer " + (open(os.path.expanduser(m["key_file"])).read().strip()
+                                      if key_fingerprint(m["key_file"]) else "")})
+    with urllib.request.urlopen(req, timeout=15) as r:
+        return [d.get("id") for d in json.load(r).get("data") or [] if d.get("id")]
+
+
+def _new_velella_key(kf, quiet_if_exists=False):
+    """Make a key for tokens.velella.ca if there is none, and say what to send for enrolment."""
+    import secrets
+    if quiet_if_exists and os.path.isfile(os.path.expanduser(kf)):
+        print(f"   using your key at {kf} (`papers profile` shows its fingerprint)")
+        return
+    if not os.path.isfile(os.path.expanduser(kf)):
+        _write_private(kf, "vsk-" + secrets.token_hex(32) + "\n")
+        print(f"   made you a new key in {kf} (only you can read it; never share it)")
+    print(f"   Your key's FINGERPRINT (safe to share):\n\n     {key_fingerprint(kf)}\n\n"
+          "   Send the fingerprint, not the key, to the operator of tokens.velella.ca and ask to be\n"
+          "   enrolled. The chat works once they confirm. A lost key cannot be recovered, only\n"
+          "   replaced: delete the file, run `papers init` again, and send the new fingerprint.\n")
+
+
+def _model_line(name, m, default):
+    where = m.get("model") or "the first model it serves"
+    if m["backend"] != "claude":
+        where += " @ " + (urllib.parse.urlparse(m["url"]).hostname or m["url"])
+    ok, why = model_ready(m)
+    return f"{'*' if name == default else ' '} {name:<12} {m['backend']:<8} {where}" + ("" if ok else f"   ({why})")
+
+
+def cmd_model(a):
+    """List, choose, add or remove the chat's models (the web app's top bar switches too)."""
+    models, default = chat_models()
+    act, name = a.action, a.name
+    if act is None:
+        print("The chat's models (* = the default; switch with `papers model use NAME`):")
+        for k, m in models.items():
+            print(_model_line(k, m, default))
+        return
+    if not name:
+        sys.exit(f"papers model {act} needs a model name (one of: {', '.join(models)})")
+    if act == "use":
+        if name not in models:
+            sys.exit(f"no model named {name!r} (have: {', '.join(models)}); add it with `papers model add`")
+        save_models(models, name)
+        print(f"the chat now uses {name}; a running web app switches with its top-bar menu, or restart it")
+    elif act == "add":
+        b = a.backend or ("claude" if (a.model or "").startswith("claude") else None)
+        if b not in CHAT_BACKENDS:
+            sys.exit(f"give --backend: {', '.join(CHAT_BACKENDS)}")
+        m = {"backend": b}
+        if a.model:
+            m["model"] = a.model
+        if b != "claude":
+            if a.url:
+                m["url"] = a.url
+            elif b == "openai":
+                sys.exit("an openai-compatible model needs --url (its base URL, ending in /v1)")
+            if a.key_file:
+                m["key_file"] = _tilde(a.key_file)
+            elif b == "openai":
+                sys.exit("an openai-compatible model needs --key-file (a file holding its API key)")
+        m = model_defaults(m)
+        if b == "velella":
+            _new_velella_key(m["key_file"], quiet_if_exists=True)
+        models[name] = m
+        save_models(models, name if (a.default or len(models) == 1) else default)
+        print(_model_line(name, m, name if a.default else default))
+        if b != "claude" and not a.model:
+            try:
+                ids = served_models(m)
+                print(f"   it serves: {', '.join(ids) or '(nothing listed)'}; the first is used unless you add --model")
+            except Exception as e:                       # noqa: BLE001 — e.g. not enrolled yet
+                print(f"   (could not ask it which models it serves yet: {e})")
+    elif act == "remove":
+        if name not in models:
+            sys.exit(f"no model named {name!r}")
+        if len(models) == 1:
+            sys.exit("that is the only model; add another before removing it")
+        del models[name]
+        save_models(models, default if default != name else next(iter(models)))
+        print(f"removed {name}" + (f"; the default is now {next(iter(models))}" if default == name else ""))
+    elif act == "served":
+        if name not in models or models[name]["backend"] == "claude":
+            sys.exit("`served` asks an OpenAI-compatible endpoint (velella or openai) which models it serves")
+        print("\n".join(served_models(models[name])))
+
+
 def cmd_init(a):
     """Set up papers-vela for one user: library folder, contact email, NASA ADS token, chat model.
     Writes ~/.config/papers/profile.json. Safe to re-run: current answers are the defaults."""
-    import getpass, secrets
+    import getpass
     prof = dict(PROFILE)
-    chat = dict(prof.get("chat") or {})
+    models, default = chat_models()
+    cur = models[default]
+    if not (prof.get("models") or prof.get("chat")):
+        models = {}                     # a first setup: only the model chosen below, no stand-in
     print(f"papers-vela setup  (profile: {_tilde(PROFILE_PATH)})\n")
 
     # 1. the library: a folder of DATA (library.db + pdfs/), never code
@@ -1271,31 +1594,30 @@ def cmd_init(a):
         else:
             print("   skipped; run `papers init` again when you have it\n")
 
-    # 4. the chat's model
+    # 4. the chat's model (more can be added later: `papers model add`)
     backend = a.backend or _ask(
         "4. Which model should the chat use?\n"
         "     claude   your own Claude subscription, through Claude Code (install it and log in once)\n"
         "     velella  tokens.velella.ca, an open-weight model hosted for the group (needs enrolment)",
-        chat.get("backend", "claude"), a.yes)
+        cur["backend"] if cur["backend"] in ("claude", "velella") else "claude", a.yes)
     if backend not in ("claude", "velella"):
-        sys.exit(f"unknown chat backend {backend!r} (use claude or velella)")
+        sys.exit(f"unknown chat backend {backend!r} (use claude or velella; others: `papers model add`)")
     if backend == "claude":
-        chat = {"backend": "claude", "model": chat.get("model") if chat.get("backend") == "claude" and chat.get("model")
-                else "claude-sonnet-5-5"}
-        cl = shutil.which("claude") or next((p for p in (os.path.expanduser("~/.local/bin/claude"),
-                                                         os.path.expanduser("~/.claude/local/claude")) if os.path.exists(p)), None)
+        mid = a.model or _ask(
+            "   Which Claude model?\n"
+            "     claude-sonnet-5-5   the default: fast, and strong at this\n"
+            "     claude-opus-5-5     the strongest; uses more of your plan\n"
+            "     claude-haiku-5-5    the quickest and lightest",
+            cur.get("model") if cur["backend"] == "claude" else CLAUDE_DEFAULT_MODEL, a.yes)
+        m = {"backend": "claude", "model": mid}
+        cl = find_claude()
         print(f"   Claude Code: {'found at ' + cl if cl else 'NOT FOUND — install it (https://claude.com/claude-code) and run `claude` once to log in'}\n")
     else:
-        kf = chat.get("key_file") if chat.get("backend") == "velella" and chat.get("key_file") else "~/.config/spigot/key"
-        chat = {"backend": "velella", "url": chat.get("url") or VELELLA_URL, "key_file": kf}
-        if not os.path.isfile(os.path.expanduser(kf)):
-            _write_private(kf, "vsk-" + secrets.token_hex(32) + "\n")
-            print(f"   made you a new key in {kf} (only you can read it; never share it)")
-        print(f"   Your key's FINGERPRINT (safe to share):\n\n     {key_fingerprint(kf)}\n\n"
-              "   Send the fingerprint, not the key, to the operator of tokens.velella.ca and ask to be\n"
-              "   enrolled. The chat works once they confirm. A lost key cannot be recovered, only\n"
-              "   replaced: delete the file, run `papers init` again, and send the new fingerprint.\n")
-    prof["chat"] = chat
+        m = model_defaults({"backend": "velella", **({"model": a.model} if a.model else {})})
+        _new_velella_key(m["key_file"])
+    name = model_slug(m)
+    models[name] = m
+    prof["models"], prof["chat"] = models, name
 
     _write_private(PROFILE_PATH, json.dumps(prof, indent=2) + "\n")
     print(f"Saved {_tilde(PROFILE_PATH)}.\n\nNext:\n  papers web            open the web app"
@@ -1312,15 +1634,13 @@ def cmd_profile(a):
     print(f"library : {_tilde(LIB) if LIB else '— not found'}" + (f"   ({n} papers)" if n is not None else ""))
     print(f"email   : {EMAIL}")
     print(f"ADS     : {'token found' if os.path.isfile(ADS_TOKEN_FILE) else 'no token'} ({_tilde(ADS_TOKEN_FILE)})")
-    chat = profile_get("chat", default={}) or {}
-    b = os.environ.get("PAPERS_CHAT_BACKEND") or chat.get("backend", "claude")
-    if b == "velella":
-        kf = chat.get("key_file", "~/.config/spigot/key")
+    models, default = chat_models()
+    print("chat    : (* = the default; `papers model` to change)")
+    for k, m in models.items():
+        print("   " + _model_line(k, m, default))
+    for kf in dict.fromkeys(m["key_file"] for m in models.values() if m["backend"] == "velella"):
         fp = key_fingerprint(kf)
-        print(f"chat    : tokens.velella.ca ({chat.get('url', VELELLA_URL)})")
         print(f"key     : {kf}" + (f"\nfingerprint (send this, never the key): {fp}" if fp else "   — MISSING, run `papers init`"))
-    else:
-        print(f"chat    : Claude via Claude Code, model {os.environ.get('PAPERS_WEB_MODEL') or chat.get('model', 'claude-sonnet-5-5')}")
     rem = profile_get("remote")
     if rem:
         print(f"remote  : {rem.get('host')}:{rem.get('path')}   (papers sync-trillium)")
@@ -1579,21 +1899,23 @@ def cmd_tag(a):
 
 
 def cmd_renamelist(a):
-    """Rename a list in place. paper_lists references list_id, not name, so this only
-    touches lists.name (and the keyed-by-name list_summary auto-layer row) — no per-paper
-    re-tagging needed."""
-    c = db()
-    old = c.execute("SELECT id FROM lists WHERE name=?", (a.old,)).fetchone()
-    if not old:
-        sys.exit(f"no list named '{a.old}' (try: papers lists)")
-    if c.execute("SELECT 1 FROM lists WHERE name=?", (a.new,)).fetchone():
-        sys.exit(f"a list named '{a.new}' already exists — merging lists isn't supported by this command")
-    n = c.execute("SELECT COUNT(*) n FROM paper_lists WHERE list_id=?", (old["id"],)).fetchone()["n"]
-    c.execute("UPDATE lists SET name=? WHERE id=?", (a.new, old["id"]))
-    c.execute("UPDATE list_summary SET name=? WHERE name=?", (a.new, a.old))
-    c.commit(); reindex_lists(c, [a.new])
+    """Rename a list in place (rename_list): papers and description go with it."""
+    try:
+        n = rename_list(db(), a.old, a.new)
+    except ValueError as e:
+        sys.exit(f"{e} (try: papers lists)")
     print(f"renamed '{a.old}' -> '{a.new}' ({n} paper(s))")
-    print("  run `papers bib` to regenerate references.bib + INDEX.md + by-list/")
+    print("  run `papers bib` to regenerate references.bib + INDEX.md + lists/")
+
+
+def cmd_mergelists(a):
+    """Merge list `from` into list `into` (merge_lists): its papers join `into`, then it is deleted."""
+    try:
+        n, new = merge_lists(db(), a.src, a.dst)
+    except ValueError as e:
+        sys.exit(f"{e} (try: papers lists)")
+    print(f"merged '{a.src}' into '{a.dst}': {n} paper(s), {new} of them new to '{a.dst}'; '{a.src}' deleted")
+    print("  run `papers bib` to regenerate references.bib + INDEX.md + lists/")
 
 
 def cmd_deletelist(a):
@@ -1606,11 +1928,7 @@ def cmd_deletelist(a):
     n = c.execute("SELECT COUNT(*) n FROM paper_lists WHERE list_id=?", (row["id"],)).fetchone()["n"]
     if n and not a.force:
         sys.exit(f"'{a.name}' still has {n} paper(s) — retag them elsewhere first, or pass --force to delete anyway")
-    if n:
-        c.execute("DELETE FROM paper_lists WHERE list_id=?", (row["id"],))
-    c.execute("DELETE FROM lists WHERE id=?", (row["id"],))
-    c.execute("DELETE FROM list_summary WHERE name=?", (a.name,))
-    c.commit()
+    delete_list(c, a.name)
     print(f"deleted list '{a.name}'" + (f" (removed {n} membership(s))" if n else " (was empty)"))
 
 
@@ -1713,6 +2031,8 @@ def main():
     s.add_argument("--remove", action="store_true"); s.set_defaults(fn=cmd_tag)
     s = sub.add_parser("rename-list"); s.add_argument("old"); s.add_argument("new")
     s.set_defaults(fn=cmd_renamelist)
+    s = sub.add_parser("merge-lists", help="move every paper of one list into another, then delete the first")
+    s.add_argument("src", metavar="from"); s.add_argument("dst", metavar="into"); s.set_defaults(fn=cmd_mergelists)
     s = sub.add_parser("delete-list"); s.add_argument("name"); s.add_argument("--force", action="store_true")
     s.set_defaults(fn=cmd_deletelist)
     s = sub.add_parser("refresh"); s.add_argument("ident", nargs="?")
@@ -1761,8 +2081,16 @@ def main():
     s = sub.add_parser("clean"); s.set_defaults(fn=cmd_clean)
     s = sub.add_parser("init", help="set up your profile (and a new library)")
     s.add_argument("--library"); s.add_argument("--email"); s.add_argument("--backend", choices=["claude", "velella"])
+    s.add_argument("--model", help="the chat model id, e.g. claude-opus-5-5")
     s.add_argument("--yes", action="store_true", help="accept every default, ask nothing"); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("profile", help="show your profile and key fingerprint"); s.set_defaults(fn=cmd_profile)
+    s = sub.add_parser("model", help="list, choose, add or remove the chat's models")
+    s.add_argument("action", nargs="?", choices=["use", "add", "remove", "served"])
+    s.add_argument("name", nargs="?")
+    s.add_argument("--backend", choices=list(CHAT_BACKENDS)); s.add_argument("--model")
+    s.add_argument("--url"); s.add_argument("--key-file", dest="key_file")
+    s.add_argument("--default", action="store_true", help="make the added model the default")
+    s.set_defaults(fn=cmd_model)
     s = sub.add_parser("web", help="open the web app (starting it if needed); `web stop` stops it")
     s.add_argument("action", nargs="?", default="open", choices=["open", "stop", "status"])
     s.add_argument("--port", type=int, default=int(os.environ.get("PAPERS_WEB_PORT") or profile_get("port", default=8787)))
@@ -1774,7 +2102,7 @@ def main():
     a = ap.parse_args()
     # check-refs needs no library (and must not have one); init CREATES the library and profile
     # report what is missing; web checks for itself once it knows it has to start a server
-    if a.cmd not in ("check-refs", "init", "profile", "web"):
+    if a.cmd not in ("check-refs", "init", "profile", "web", "model"):
         require_lib()
     # PROPAGATE the command's exit code. `papers audit` returns non-zero on a regression and the
     # scheduled LaunchAgent keys off that; swallowing it here made a detected regression exit 0,

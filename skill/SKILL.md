@@ -41,6 +41,9 @@ instructions, so this is the one copy; the sections below say how to carry the r
    have not seen resolved and say what it is; if it is not the paper the user described, or
    several papers fit, ask before adding.
 7. When you cite a record marked not verified, never checked, or admitted by override, say so.
+8. Organise lists (file papers into or out of them, rename, merge, delete, describe) when the user
+   asks, using exact list names, and say exactly what changed. A list change only regroups papers:
+   it never deletes a paper or changes what a paper says.
 <!-- RULES:END -->
 
 ## Library backends
@@ -205,6 +208,10 @@ network call at all.
 | `open <id>` | Open that paper's PDF in the macOS viewer. |
 | `lists` | All lists with paper + PDF counts (and source: cloud / legacy / manual). |
 | `list "<name>"` | Papers in a named list. |
+| `tag <id> --list "L" [--list "M"] [--remove]` | File a paper into lists (a new name creates the list), or take it out with `--remove`. The paper itself is never touched. |
+| `rename-list "<old>" "<new>"` | Rename a list in place; its papers and description move with it. Refuses if `<new>` exists: merge instead. |
+| `merge-lists "<from>" "<into>"` | Every paper of `<from>` joins `<into>`, then `<from>` is deleted; `<into>` keeps its name and description. |
+| `delete-list "<name>" [--force]` | Delete a list. Refuses while it still has papers unless `--force`, which only removes the memberships; papers are never deleted. **Use these, never SQL, to reorganize lists.** |
 | `index [--domain D] [--grep TERM] [--anchors]` | **Routing view** — every list with a 1-line blurb, themes, domains, counts, year span. Filter by `--domain` or `--grep` to find which lists cover a topic. Start here for topical questions. |
 | `reindex [--list L]` | Refresh the auto layer (counts, keywords, citation anchors); flags `⚠stale` summaries. (`set-summary` / `load-summaries` store the written blurbs.) |
 | `ads "<ADS query>" [--rows N] [--cited]` | Search **NASA ADS** (full query syntax, e.g. `author:"^Herwig" year:2023-2026 abs:i-process`); returns bibcodes + year + citation count. Pipe a bibcode into `add`. |
@@ -216,6 +223,7 @@ network call at all.
 | `verify.py [--only doi\|arxiv] [--report] [--regrade] [--selftest]` | The verifier itself (run from the repo, not via `papers`). Caches authority responses, so a comparator change re-scores offline with `--regrade` instead of re-fetching. `--selftest` is 52 cases. |
 | `check-refs <file.bib\|file.tex> [--json] [--strict] [--offline]` | Verify references in a document **you did not write** (refereeing). **Read-only — never opens the library**, and needs no library configured. Verdicts: `ok` / `MISMATCH` (resolves to a *different* paper) / `UNRESOLVABLE` / `DRIFT` (right paper, paraphrased title or truncated authors) / `UNCHECKABLE` (no identifier). **Exits non-zero on MISMATCH or UNRESOLVABLE.** Warn the user about confidentiality first — see § Citation correctness; `--offline` skips all network. |
 | `stats` | Library overview. |
+| `model [use\|add\|remove\|served NAME]` | The web chat's models: list them, choose the default, add one (`--backend claude\|velella\|openai --model … --url … --key-file …`), remove one. |
 | `serve [--port N] [--no-open]` | Launch the localhost web GUI (browse + a chat that searches the library and ADS and can add papers through the gate). Tell the user to open the printed `http://127.0.0.1:…/?token=…` URL; `Ctrl-C` stops it. |
 | `sync-trillium [--dry-run] [--no-pdfs]` | Bidirectionally merge `library.db` + `pdfs/` with the profile's `remote` (e.g. a cluster's `/scratch`; laptop-initiated only). See § Trillium sync above. |
 
@@ -227,9 +235,11 @@ Y" — run `papers index` (optionally `--domain D` / `--grep TERM`) **first**. I
 themes + domains per list, so you can pick the relevant lists and then drill in with `list` /
 `search` — without scanning the whole library. **`papers index` auto-refreshes the auto layer on
 every call** (and `add`/`gaps` self-refresh too), so counts/keywords/anchors are always current —
-nobody has to remember to reindex. `⚠stale` / `⚠no-blurb` means a list's membership changed since its
-**blurb** was written: when that list is relevant to the user's request, re-read it and update the
-blurb with `papers set-summary "<list>" --blurb "…" --themes "…" --domains "…"`.
+nobody has to remember to reindex. `⚠stale` means a list has changed substantially since its
+**blurb** was written (by a fifth of its size, or five papers); `⚠no-blurb` means it has none. When
+that list is relevant to the user's request, re-read it and update the blurb with
+`papers set-summary "<list>" --blurb "…" --themes "…" --domains "…"` (an option left out keeps its
+value). In the web app the user can do the same with one click on the list's chip.
 
 1. **Finding papers** → run `search`, optionally with `--list`/`--author`/`--year`. Show the
    user the returned rows (id, year, author, title). To open one, run `open <id>`.

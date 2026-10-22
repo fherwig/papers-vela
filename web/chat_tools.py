@@ -12,12 +12,19 @@ construction rather than by being told:
                                                             for anything not yet in the library
   add_paper                                                 `papers add` itself, admission gate
                                                             and all; never --force-unverified
+  file_papers / rename_list / merge_lists / delete_list /   organising lists; each change can be
+  set_list_description                                      undone, none deletes or edits a paper
 
-add_paper is listed only when the server sets PAPERS_CHAT_ADD=1, which it does only when the
-library is writable AND the user's own message asks to add something. A sentence inside an
-abstract or a PDF therefore cannot make the chat add a paper on a turn the user didn't ask.
+add_paper is listed only when the server sets PAPERS_CHAT_ADD=1, the list tools only when it sets
+PAPERS_CHAT_LIST=1: it does so only when the library is writable AND the user's own message asks
+for that kind of change (or says a short yes to the chat's own offer). A sentence inside an
+abstract or a PDF therefore cannot make the chat change the library on a turn the user didn't ask.
+
+The policy (2026-10-16): the chat may do what the user could do with a button in the web app,
+when the user asks, and every change can be undone. It never deletes a paper and never changes
+what a paper says: records come only from the authorities, through the admission gate.
 """
-import difflib, json, os, re, subprocess, sys
+import difflib, json, os, re, secrets, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -26,8 +33,10 @@ PROTO = sys.stdout               # the MCP channel; main() moves stray engine pr
 import papers as eng             # noqa: E402
 
 CAN_ADD = os.environ.get("PAPERS_CHAT_ADD") == "1"
-# On a turn where the user only said "yes" to an offer, the server allows ONE add (see asks_to_add).
-ADD_BUDGET = {"adds_left": int(os.environ["PAPERS_CHAT_ADD_LIMIT"])} if os.environ.get("PAPERS_CHAT_ADD_LIMIT") else None
+CAN_LIST = os.environ.get("PAPERS_CHAT_LIST") == "1"
+# On a turn where the user only said "yes" to an offer, the server allows ONE add or ONE list change.
+BUDGET = {k: int(os.environ[e]) for k, e in (("adds_left", "PAPERS_CHAT_ADD_LIMIT"),
+                                             ("list_ops_left", "PAPERS_CHAT_LIST_LIMIT")) if os.environ.get(e)} or None
 PAPERS_PY = os.path.join(REPO, "papers.py")
 IDENT = re.compile(r"\d{4}\.\d{4,5}|10\.\d{4,9}/\S+|\d{4}[A-Za-z0-9.&]{15}")
 
@@ -164,6 +173,100 @@ def add_paper(a):
                   else "\n(references.bib NOT regenerated: " + eng.trunc((b.stderr or b.stdout).strip(), 200) + ")")
 
 
+# ---------------- list changes, each with an Undo ----------------
+# One store for the Undo of every list change, whoever made it: the GUI's buttons (server.py) and
+# the chat's tools, which under claude run in a separate process (this file as MCP server). A change
+# answers with a marker, [undo:<id>], that the server turns into an Undo button under the reply.
+UNDO_DIR = os.path.expanduser("~/.cache/papers-web/undo")
+UNDO_MARK = re.compile(r"\[undo:([0-9a-f]{12})\]")
+
+
+def save_undo(snap, label):
+    os.makedirs(UNDO_DIR, mode=0o700, exist_ok=True)
+    for fn in os.listdir(UNDO_DIR):                       # an Undo is for now, not for next week
+        p = os.path.join(UNDO_DIR, fn)
+        if time.time() - os.path.getmtime(p) > 2 * 86400:
+            os.remove(p)
+    uid = secrets.token_hex(6)
+    with open(os.path.join(UNDO_DIR, uid + ".json"), "w", encoding="utf-8") as f:
+        json.dump({"lib": eng.LIB, "label": label, "snap": snap}, f)
+    return uid
+
+
+def apply_undo(uid):
+    """Undo one list change by its id -> its label. Raises ValueError if it is unknown or used."""
+    if not re.fullmatch(r"[0-9a-f]{12}", uid or ""):
+        raise ValueError("not an undo id")
+    p = os.path.join(UNDO_DIR, uid + ".json")
+    try:
+        u = json.load(open(p, encoding="utf-8"))
+    except (OSError, ValueError):
+        raise ValueError("nothing to undo (already undone, or too old)")
+    if u.get("lib") != eng.LIB:
+        raise ValueError("that change was made in another library")
+    eng.restore_lists(eng.db(), u["snap"])
+    os.remove(p)
+    return u["label"]
+
+
+def list_change(op, a):
+    """Make one list change -> (what changed, undo id). op: rename | merge | delete | file |
+    describe. Raises ValueError with a sentence for the user when it can't be done."""
+    c = eng.db()
+    if op == "rename":
+        old, new = str(a.get("name") or ""), " ".join(str(a.get("new_name") or "").split())
+        snap = eng.snapshot_lists(c, [old, new])
+        n = eng.rename_list(c, old, new)
+        label = f"renamed list {old!r} to {new!r} ({n} papers)"
+    elif op == "merge":
+        src, dst = str(a.get("from") or ""), str(a.get("into") or "")
+        snap = eng.snapshot_lists(c, [src, dst])
+        n, new = eng.merge_lists(c, src, dst)
+        label = f"merged list {src!r} into {dst!r} ({n} papers, {new} new to {dst!r}); {src!r} is gone"
+    elif op == "delete":
+        name = str(a.get("name") or "")
+        snap = eng.snapshot_lists(c, [name])
+        n = eng.delete_list(c, name)
+        label = f"deleted list {name!r} (its {n} papers stay in the library)"
+    elif op == "file":
+        name, remove = " ".join(str(a.get("list") or "").split()), bool(a.get("remove"))
+        ids = [i for i in (a.get("ids") or []) if isinstance(i, int) or str(i).isdigit()]
+        if not ids:
+            raise ValueError("give the ids of library papers")
+        snap = eng.snapshot_lists(c, [name])
+        changed, missing = eng.file_papers(c, ids, name, remove)
+        nothing = not changed
+        label = (f"{'took' if remove else 'filed'} {len(changed)} paper(s) {'out of' if remove else 'into'} "
+                 f"list {name!r}" + (f" ({', '.join(map(str, changed))})" if changed else " (no change)")
+                 + (f"; not in the library: {', '.join(map(str, missing))}" if missing else ""))
+    elif op == "describe":
+        name = str(a.get("name") or "")
+        _list_known = eng._list_id(c, name)               # noqa: F841 — raises for an unknown list
+        fields = {k: " ".join(str(a.get(k) or "").split()) for k in ("blurb", "themes", "domains")}
+        if not fields["blurb"]:
+            raise ValueError("a description needs a blurb")
+        snap = eng.snapshot_lists(c, [name])
+        eng.set_summary(c, name, fields["blurb"][:300], fields["themes"][:200], fields["domains"][:120])
+        label = f"wrote a new description for list {name!r}"
+    else:
+        raise ValueError(f"unknown list change {op!r}")
+    if op == "file" and nothing:
+        return label, None                                # nothing changed, so nothing to undo
+    return label, save_undo(snap, label)
+
+
+def _change(op):
+    def tool(a):
+        try:
+            label, uid = list_change(op, a)
+        except ValueError as e:
+            return f"NOT CHANGED: {e}"
+        if not uid:
+            return f"Done: {label}."
+        return f"Done: {label}. [undo:{uid}] An Undo button for this appears under your reply."
+    return tool
+
+
 S = lambda **p: {"type": "object", "properties": p, "additionalProperties": False}   # noqa: E731
 STR, INT = {"type": "string"}, {"type": "integer"}
 TOOLS = [
@@ -200,25 +303,60 @@ ADD_TOOL = ("add_paper", add_paper,
      {**S(identifier=STR, lists={"type": "array", "items": STR}), "required": ["identifier"]})
 
 
-def tool_list(can_add):
-    """The tools offered on one turn: the reads always, add_paper only when the server says the
-    user asked (see asks_to_add in server.py). Shared by both chat backends."""
-    return TOOLS + ([ADD_TOOL] if can_add else [])
+IDS = {"type": "array", "items": INT}
+LIST_TOOLS = [
+    ("file_papers", _change("file"),
+     "File library papers (by [id]) into a list, or take them out of it with remove=true. A new list "
+     "name creates the list. The papers themselves are never changed.",
+     {**S(ids=IDS, list=STR, remove={"type": "boolean"}), "required": ["ids", "list"]}),
+    ("rename_list", _change("rename"),
+     "Rename a list (exact current name from the routing index). Its papers and description go with it. "
+     "Refused if the new name exists: merge the two instead.",
+     {**S(name=STR, new_name=STR), "required": ["name", "new_name"]}),
+    ("merge_lists", _change("merge"),
+     "Merge two lists: every paper of list `from` joins list `into`, then `from` is deleted. `into` keeps "
+     "its name and description. Make sure which list the user wants to keep.",
+     {"type": "object", "properties": {"from": STR, "into": STR}, "additionalProperties": False,
+      "required": ["from", "into"]}),
+    ("delete_list", _change("delete"),
+     "Delete a list. Its papers stay in the library; only the grouping goes.",
+     {**S(name=STR), "required": ["name"]}),
+    ("set_list_description", _change("describe"),
+     "Write a list's description after reading its papers (list_papers): blurb = one sentence, at most "
+     "200 characters, on what the list covers; themes = three to six short themes, comma-separated; "
+     "domains = one to three domain tags from the routing index, comma-separated.",
+     {**S(name=STR, blurb=STR, themes=STR, domains=STR), "required": ["name", "blurb", "themes", "domains"]}),
+]
+LIST_TOOL_NAMES = {n for n, _, _, _ in LIST_TOOLS}
 
 
-def call_tool(name, args, can_add, budget=None):
+def tool_list(can_add, can_list=False):
+    """The tools offered on one turn: the reads always; add_paper and the list tools only when the
+    server says the user asked for that kind of change (asks_to_add / asks_to_organise in
+    server.py). Shared by both chat backends."""
+    return TOOLS + ([ADD_TOOL] if can_add else []) + (LIST_TOOLS if can_list else [])
+
+
+def call_tool(name, args, can_add, budget=None, can_list=False):
     """Run one tool by name -> (text, is_error). A tool not offered this turn is refused here too,
-    so a model that names add_paper anyway gets nothing; `budget` caps how many adds succeed."""
-    fn = {n: f for n, f, _, _ in tool_list(can_add)}.get(name)
+    so a model that names add_paper anyway gets nothing; `budget` caps how many adds or list
+    changes succeed on a turn where the user only said yes."""
+    fn = {n: f for n, f, _, _ in tool_list(can_add, can_list)}.get(name)
     if not fn:
         return f"tool {name!r} is not available on this turn", True
-    if name == "add_paper" and budget is not None and budget["adds_left"] <= 0:
+    if name == "add_paper" and budget is not None and budget.get("adds_left", 1) <= 0:
         return ("NOT ADDED: the user only said yes, and that adds ONE paper. Tell the user which paper "
                 "you added, and ask which of the others (if any) they want added."), True
+    if name in LIST_TOOL_NAMES and budget is not None and budget.get("list_ops_left", 1) <= 0:
+        return ("NOT CHANGED: the user only said yes, and that allows ONE change. Tell the user what you "
+                "changed, and ask before making the next one."), True
     try:
         out = fn(args if isinstance(args, dict) else {})
-        if name == "add_paper" and budget is not None and re.match(r"(?:fetching .*\n)?(added id|already in library)", out):
+        if name == "add_paper" and budget is not None and "adds_left" in budget \
+                and re.match(r"(?:fetching .*\n)?(added id|already in library)", out):
             budget["adds_left"] -= 1
+        if name in LIST_TOOL_NAMES and budget is not None and "list_ops_left" in budget and out.startswith("Done:"):
+            budget["list_ops_left"] -= 1
         return out, False
     except (Exception, SystemExit) as e:          # noqa: BLE001 — a tool error is a result, not a crash
         return f"tool error: {e}", True
@@ -247,9 +385,9 @@ def main():
                 "capabilities": {"tools": {}}, "serverInfo": {"name": "papers", "version": "1.0"}}})
         elif method == "tools/list":
             send({"jsonrpc": "2.0", "id": mid, "result": {"tools": [
-                {"name": n, "description": d, "inputSchema": s} for n, _, d, s in tool_list(CAN_ADD)]}})
+                {"name": n, "description": d, "inputSchema": s} for n, _, d, s in tool_list(CAN_ADD, CAN_LIST)]}})
         elif method == "tools/call":
-            text, err = call_tool(params.get("name"), params.get("arguments") or {}, CAN_ADD, ADD_BUDGET)
+            text, err = call_tool(params.get("name"), params.get("arguments") or {}, CAN_ADD, BUDGET, CAN_LIST)
             send({"jsonrpc": "2.0", "id": mid,
                   "result": {"content": [{"type": "text", "text": text}], "isError": err}})
         elif method == "ping":
